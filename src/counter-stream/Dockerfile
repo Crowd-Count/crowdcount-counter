@@ -1,40 +1,47 @@
-# Pi 5 / Bookworm friendly base
-FROM python:3.11-bookworm
+# Raspberry Pi video streaming client
+FROM python:3.11-slim-bookworm
 
-# Allow Raspberry Pi OS packages inside the container
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gnupg2 ca-certificates && \
-    curl -fsSL https://archive.raspberrypi.org/debian/raspberrypi.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/raspberrypi-archive-keyring.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg arch=arm64] http://archive.raspberrypi.org/debian/ bookworm main" \
-      > /etc/apt/sources.list.d/raspi.list
-
-# Camera + media deps from apt (correct package names for Bookworm)
-# NOTE: we install python3-picamera2 and python3-opencv via apt; do NOT pip them.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3-picamera2 \
-      libcamera-apps \
-      libcamera0 \
-      libcamera-v4l2 \
-      python3-opencv \
-      v4l-utils \
-      ffmpeg \
-      build-essential cmake pkg-config \
-      libssl-dev \
-      libavformat-dev libavcodec-dev libavdevice-dev \
-      libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Camera and media
+    libcamera0.2 \
+    libcamera-tools \
+    python3-libcamera \
+    python3-kms++ \
+    libopencv-dev \
+    python3-opencv \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    v4l-utils \
+    # Build tools
+    build-essential \
+    cmake \
+    pkg-config \
+    libssl-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy & install Python deps (strip ones provided by apt)
-COPY requirements.txt /tmp/requirements.txt
-RUN sed -i '/^picamera2/d;/^opencv-python/d' /tmp/requirements.txt && \
-    pip install --no-cache-dir -r /tmp/requirements.txt
-
 WORKDIR /app
-COPY . /app
 
-ENV PYTHONUNBUFFERED=1 \
-    LIBCAMERA_LOG_LEVELS="*:2"
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "main.py"]
+# Copy application
+COPY main.py settings.py ./
+
+# Create non-root user with video group access
+RUN useradd -m -u 1000 streamer && \
+    usermod -a -G video,render streamer && \
+    chown -R streamer:streamer /app
+
+USER streamer
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python3", "main.py"]
