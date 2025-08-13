@@ -1,177 +1,173 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Raspberry Pi Video Streamer - Docker deployment helper
+# Usage:
+#   ./deploy.sh up        # build (if needed) and start in background
+#   ./deploy.sh down      # stop and remove containers
+#   ./deploy.sh rebuild   # rebuild without cache, then up -d
+#   ./deploy.sh logs      # follow logs for all services
+#   ./deploy.sh ps        # show compose status
+#   ./deploy.sh shell     # open a bash shell in the running container (best-effort)
+# Notes:
+# - This script NEVER writes to .env.
+# - It only warns if the camera isn't detected; container still starts.
 
-# Deployment script for Raspberry Pi video streamer Docker container
+set -Eeuo pipefail
 
-set -e
+TITLE="=== Raspberry Pi Video Streamer Docker Deployment ==="
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+SERVICE_GUESS="${SERVICE_OVERRIDE:-rpi-streamer}"   # override with SERVICE_OVERRIDE if your service name differs
+CONTAINER_GUESS="${CONTAINER_OVERRIDE:-crowdcount-streamer}" # override with CONTAINER_OVERRIDE if you set container_name
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+cd "$SCRIPT_DIR"
 
-echo -e "${GREEN}=== Raspberry Pi Video Streamer Docker Deployment ===${NC}"
+say() { echo -e "$*"; }
 
-# Check if running on Raspberry Pi
-if ! grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null; then
-    echo -e "${YELLOW}Warning: Not running on Raspberry Pi. Camera functionality may not work.${NC}"
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# Check for .env file
-if [ ! -f .env ]; then
-    echo -e "${RED}Error: .env file not found!${NC}"
-    echo "Creating template .env file..."
-    cat > .env << 'EOF'
-# Raspberry Pi Client Configuration
-# Server Connection
-SERVER_HOST=localhost
-SERVER_PORT=3000
-SERVER_PROTOCOL=ws
-
-# Device Authentication (CHANGE THESE!)
-DEVICE_ID=rpi_camera_01
-DEVICE_PASSWORD=changeme
-
-# Feed Information
-FEED_ID=rpi_camera_01
-FEED_NAME=Raspberry Pi Camera
-
-# Environment
-ENV=production
-
-# Logging
-LOG_LEVEL=INFO
-EOF
-    echo -e "${YELLOW}Please edit .env file with your configuration before running again.${NC}"
+need_file() {
+  if [[ ! -f "$1" ]]; then
+    say "Error: required file '$1' not found in $(pwd)"
     exit 1
-fi
+  fi
+}
 
-# Create logs directory
-mkdir -p logs
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# Function to check Docker installation
-check_docker() {
-    if ! command -v docker &> /dev/null; then
-        echo -e "${RED}Docker is not installed!${NC}"
-        echo "Install Docker with: curl -sSL https://get.docker.com | sh"
-        echo "Add user to docker group: sudo usermod -aG docker $USER"
-        exit 1
-    fi
-    
-    if ! command -v docker-compose &> /dev/null; then
-        echo -e "${YELLOW}docker-compose not found, trying docker compose...${NC}"
-        if ! docker compose version &> /dev/null; then
-            echo -e "${RED}Docker Compose is not installed!${NC}"
-            echo "Install with: sudo apt-get install docker-compose-plugin"
-            exit 1
-        fi
-        COMPOSE_CMD="docker compose"
+detect_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+  elif have_cmd docker-compose; then
+    say "docker-compose found (legacy)."
+    COMPOSE=(docker-compose)
+  else
+    say "Error: Neither 'docker compose' nor 'docker-compose' is installed."
+    exit 1
+  fi
+}
+
+warn_compose_version_key() {
+  # Don't modify the file; just warn if deprecated 'version:' is present
+  if grep -E -q '^[[:space:]]*version:' "$COMPOSE_FILE"; then
+    say "Note: '$COMPOSE_FILE' contains a 'version:' key which is deprecated in modern Compose and will be ignored."
+    say "      Consider removing it to avoid warnings."
+  fi
+}
+
+check_camera_nonblocking() {
+  say "Checking camera configuration..."
+  if have_cmd libcamera-hello; then
+    if libcamera-hello --list-cameras 2>/dev/null | grep -qE '^Available cameras'; then
+      say "Camera detected."
     else
-        COMPOSE_CMD="docker-compose"
+      say "Camera NOT detected by libcamera. Container will still start."
+      say "Tip: On the host, test with: libcamera-hello -t 2000"
+      say "     If it fails, check ribbon cable, enable camera, and run: v4l2-ctl --list-devices"
     fi
+  else
+    say "libcamera-hello not found on host. Skipping camera check. (Install 'libcamera-apps' on Pi OS Bookworm to enable this check.)"
+  fi
 }
 
-# Function to enable camera
-enable_camera() {
-    echo -e "${GREEN}Checking camera configuration...${NC}"
-    
-    # Check if camera is enabled in config
-    if ! raspi-config nonint get_camera 2>/dev/null; then
-        echo -e "${YELLOW}Enabling camera interface...${NC}"
-        sudo raspi-config nonint do_camera 0
-        echo -e "${YELLOW}Camera enabled. A reboot may be required.${NC}"
-    fi
-    
-    # Check for camera detection
-    if command -v libcamera-hello &> /dev/null; then
-        if ! timeout 2 libcamera-hello --list-cameras &> /dev/null; then
-            echo -e "${YELLOW}Camera not detected. Please check connections.${NC}"
-        else
-            echo -e "${GREEN}Camera detected successfully.${NC}"
-        fi
-    fi
+compose() { "${COMPOSE[@]}" -f "$COMPOSE_FILE" "$@"; }
+
+container_name_guess() {
+  # 1) Prefer an explicitly running container that matches container_name guess
+  local c
+  c="$(docker ps --format '{{.Names}}' | grep -E "^${CONTAINER_GUESS}$" || true)"
+  if [[ -n "$c" ]]; then echo "$c"; return 0; fi
+
+  # 2) Fall back to a container derived from the service name
+  c="$(docker ps --format '{{.Names}}' | grep -E "${SERVICE_GUESS}" | head -n1 || true)"
+  if [[ -n "$c" ]]; then echo "$c"; return 0; fi
+
+  # 3) As a last resort, take the first container for this compose project
+  local project
+  project="$("${COMPOSE[@]}" -f "$COMPOSE_FILE" ps --services 2>/dev/null | head -n1 || true)"
+  if [[ -n "$project" ]]; then
+    c="$(docker ps --format '{{.Names}}' | grep -E "${project}" | head -n1 || true)"
+    if [[ -n "$c" ]]; then echo "$c"; return 0; fi
+  fi
+
+  # nothing found
+  echo ""
+  return 1
 }
 
-# Parse command line arguments
-ACTION=${1:-up}
+usage() {
+  cat <<EOF
+$TITLE
 
-case $ACTION in
-    up|start)
-        check_docker
-        enable_camera
-        echo -e "${GREEN}Starting container...${NC}"
-        $COMPOSE_CMD up -d --build
-        echo -e "${GREEN}Container started. View logs with: docker logs -f crowdcount-streamer${NC}"
-        ;;
-    
-    down|stop)
-        check_docker
-        echo -e "${YELLOW}Stopping container...${NC}"
-        $COMPOSE_CMD down
-        echo -e "${GREEN}Container stopped.${NC}"
-        ;;
-    
-    restart)
-        check_docker
-        echo -e "${YELLOW}Restarting container...${NC}"
-        $COMPOSE_CMD restart
-        echo -e "${GREEN}Container restarted.${NC}"
-        ;;
-    
+Commands:
+  up        Build if needed and start containers in background
+  down      Stop and remove containers
+  rebuild   Rebuild images without cache, then start
+  logs      Follow logs for all services
+  ps        Show Compose status
+  shell     Open a bash shell in the running container (best-effort)
+
+Environment overrides:
+  COMPOSE_FILE         Path to compose file (default: docker-compose.yml)
+  SERVICE_OVERRIDE     Override service name guess for 'logs'/'shell' (default: rpi-streamer)
+  CONTAINER_OVERRIDE   Override container name guess for 'shell' (default: crowdcount-streamer)
+
+This script DOES NOT modify your .env.
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  if [[ -z "$cmd" ]]; then usage; exit 0; fi
+
+  say "$TITLE"
+
+  need_file "$COMPOSE_FILE"
+  detect_compose
+  warn_compose_version_key
+
+  case "$cmd" in
+    up)
+      check_camera_nonblocking
+      say "Starting container..."
+      compose up -d --build
+      compose ps
+      ;;
+
+    down)
+      compose down
+      ;;
+
+    rebuild)
+      say "Rebuilding images without cache..."
+      compose build --no-cache
+      say "Starting container..."
+      compose up -d
+      compose ps
+      ;;
+
     logs)
-        docker logs -f crowdcount-streamer
-        ;;
-    
-    build)
-        check_docker
-        echo -e "${GREEN}Building image...${NC}"
-        $COMPOSE_CMD build --no-cache
-        echo -e "${GREEN}Build complete.${NC}"
-        ;;
-    
-    status)
-        check_docker
-        echo -e "${GREEN}Container status:${NC}"
-        docker ps -a | grep crowdcount-streamer || echo "Container not found"
-        ;;
-    
+      # Show all services' logs by default
+      compose logs -f
+      ;;
+
+    ps)
+      compose ps
+      ;;
+
     shell)
-        check_docker
-        echo -e "${GREEN}Opening shell in container...${NC}"
-        docker exec -it crowdcount-streamer /bin/bash
-        ;;
-    
-    test)
-        check_docker
-        enable_camera
-        echo -e "${GREEN}Running test mode...${NC}"
-        docker run --rm -it \
-            --privileged \
-            --device /dev/vchiq:/dev/vchiq \
-            -v /opt/vc:/opt/vc:ro \
-            -v ./.env:/app/.env:ro \
-            --env-file .env \
-            --network host \
-            crowdcount-counter-rpi-streamer \
-            python3 -c "from picamera2 import Picamera2; print('Camera import successful')"
-        ;;
-    
-    *)
-        echo "Usage: $0 {up|down|restart|logs|build|status|shell|test}"
-        echo ""
-        echo "  up/start  - Build and start the container"
-        echo "  down/stop - Stop and remove the container"
-        echo "  restart   - Restart the container"
-        echo "  logs      - Follow container logs"
-        echo "  build     - Rebuild the Docker image"
-        echo "  status    - Show container status"
-        echo "  shell     - Open shell in running container"
-        echo "  test      - Test camera connectivity"
+      say "Attempting to open a shell inside the running container…"
+      local cname
+      cname="$(container_name_guess || true)"
+      if [[ -z "$cname" ]]; then
+        say "Could not determine container name. Ensure it's running, or set CONTAINER_OVERRIDE."
         exit 1
-        ;;
-esac
+      fi
+      exec docker exec -it "$cname" bash
+      ;;
+
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

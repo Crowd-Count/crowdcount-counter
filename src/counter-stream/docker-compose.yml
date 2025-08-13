@@ -1,66 +1,42 @@
-version: '3.8'
-
 services:
   rpi-streamer:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     container_name: crowdcount-streamer
     restart: unless-stopped
-    
-    # Required for camera access
+
+    # Camera access
     privileged: true
     devices:
-      - /dev/vchiq:/dev/vchiq
-      - /dev/vcsm:/dev/vcsm
       - /dev/video0:/dev/video0
-      - /dev/video10:/dev/video10
-      - /dev/video11:/dev/video11
-      - /dev/video12:/dev/video12
-      - /dev/video13:/dev/video13
-      - /dev/video14:/dev/video14
-      - /dev/video15:/dev/video15
-      - /dev/video16:/dev/video16
       - /dev/media0:/dev/media0
-      - /dev/media1:/dev/media1
-      - /dev/media2:/dev/media2
-    
-    # Mount camera configuration
+      - /dev/vchiq:/dev/vchiq   # optional on Pi 5; harmless if present
+
+    # Add video/render groups if needed
+    group_add:
+      - "44"   # video
+      - "109"  # render (often present on Pi 5)
+
+    # Minimal, no longer mounting legacy /opt/vc or host libcamera data
     volumes:
-      - /opt/vc:/opt/vc:ro
-      - /usr/share/libcamera:/usr/share/libcamera:ro
       - ./logs:/app/logs
       - ./.env:/app/.env:ro
-    
-    # Environment variables from .env file
-    env_file:
-      - .env
-    
-    # Additional environment overrides
-    environment:
-      - DISPLAY=:0
-      - LD_LIBRARY_PATH=/opt/vc/lib
-    
-    # Network configuration
+
+    # Use host network for low-latency streaming
     network_mode: host
-    
-    # Resource limits (adjust based on your Pi model)
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
-    
-    # Health check
+
+    environment:
+      - LIBCAMERA_LOG_LEVELS=*:2
+      - DISPLAY=:0
+
     healthcheck:
       test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    
-    # Logging configuration
+
     logging:
       driver: "json-file"
       options:

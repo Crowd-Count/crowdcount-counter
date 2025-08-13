@@ -1,16 +1,9 @@
-# Core dependencies
-picamera2>=0.3.17
-opencv-python>=4.8.0
-numpy>=1.24.0
-
-# WebRTC and streaming
-aiortc>=1.5.0
-websockets>=11.0
-av>=10.0.0
-
-# Utilities
-python-dotenv>=1.0.0
-
-# Optional but recommended
-aiofiles>=23.0.0
-pillow>=10.0.0
+- picamera2>=0.3.17
+- opencv-python>=4.8.0
+  numpy>=1.24.0
+  aiortc>=1.5.0
+  websockets>=11.0
+  av>=10.0.0
+  python-dotenv>=1.0.0
+  aiofiles>=23.0.0
+  pillow>=10.0.0
