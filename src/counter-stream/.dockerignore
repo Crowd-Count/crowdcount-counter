@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Documentation
+README.md
+docs/
+
+# Testing
+tests/
+*.test.py
+pytest_cache/
+.coverage
+
+# Mac
+.DS_Store
+
+# Environment files (we'll mount these separately)
+.env.local
+.env.development
+.env.test
+
+# Debug frames if enabled
+debug_frames/
+*.jpg
+*.png
