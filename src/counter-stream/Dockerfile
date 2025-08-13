@@ -1,27 +1,19 @@
-# Raspberry Pi video streaming client
+# Minimal container that uses host's libcamera
 FROM python:3.11-slim-bookworm
 
-# Install system dependencies
+# Install only essential packages
 RUN apt-get update && apt-get install -y \
-    # Camera and media
-    libcamera0.2 \
-    libcamera-tools \
-    python3-libcamera \
-    python3-kms++ \
+    # OpenCV dependencies
     libopencv-dev \
-    python3-opencv \
+    # Media libraries
     libavformat-dev \
     libavcodec-dev \
-    libavdevice-dev \
     libavutil-dev \
     libswscale-dev \
-    libswresample-dev \
-    v4l-utils \
-    # Build tools
+    # Build essentials
     build-essential \
-    cmake \
     pkg-config \
-    libssl-dev \
+    # Clean up
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -35,9 +27,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application
 COPY main.py settings.py ./
 
-# Create non-root user with video group access
+# Create logs directory
+RUN mkdir -p /app/logs
+
+# Create non-root user
 RUN useradd -m -u 1000 streamer && \
-    usermod -a -G video,render streamer && \
+    usermod -a -G video streamer && \
     chown -R streamer:streamer /app
 
 USER streamer
