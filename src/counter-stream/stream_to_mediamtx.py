@@ -38,7 +38,9 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
-        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        # Use RTMP for publishing (port 1935), RTSP is for pulling
+        self.publish_url = f"rtmp://{server_ip}:1935/{stream_name}"
+        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"  # For reference
 
         self.picam2 = None
         self.cap = None
@@ -124,7 +126,7 @@ class RTSPCameraStreamer:
     def setup_ffmpeg(self):
         """Setup ffmpeg process to stream to RTSP"""
         try:
-            # ffmpeg command to read raw video from stdin and stream to RTSP
+            # ffmpeg command to read raw video from stdin and publish via RTMP
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-y',  # Overwrite output files
@@ -141,11 +143,12 @@ class RTSPCameraStreamer:
                 '-maxrate', '2M',
                 '-bufsize', '4M',
                 '-g', str(self.fps * 2),  # Keyframe interval (2 seconds)
-                '-f', 'rtsp',  # Output format
-                self.rtsp_url
+                '-f', 'flv',  # FLV format for RTMP
+                self.publish_url
             ]
 
-            print(f"Starting ffmpeg stream to: {self.rtsp_url}")
+            print(f"Publishing stream to: {self.publish_url}")
+            print(f"Stream will be available at: {self.rtsp_url}")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
