@@ -73,14 +73,46 @@ python3 stream_to_mediamtx.py 100.64.1.2 counter1 --port 8555
 
 ## Setup Instructions
 
-### 1. Copy Script to Raspberry Pi
+### Quick Setup (Automated)
+
+The easiest way to set up your Raspberry Pi is using the automated setup script:
+
+```bash
+# 1. Copy the entire counter-stream directory to your Pi
+scp -r counter-stream pi@<PI_IP>:~/
+
+# 2. SSH into your Pi
+ssh pi@<PI_IP>
+
+# 3. Run the setup script
+cd counter-stream
+bash setup_pi.sh
+```
+
+This will automatically install:
+- FFmpeg
+- Tailscale
+- Check for camera support (picamera2/OpenCV)
+
+After the script completes, authenticate with Tailscale:
+```bash
+sudo tailscale up
+```
+
+Then you're ready to start streaming!
+
+### Manual Setup
+
+If you prefer to install dependencies manually:
+
+#### 1. Copy Script to Raspberry Pi
 
 ```bash
 # From your PC, copy the script to each Raspberry Pi
 scp stream_to_mediamtx.py pi@<PI_IP>:~/
 ```
 
-### 2. Find Your MediaMTX Server's Tailscale IP
+#### 2. Find Your MediaMTX Server's Tailscale IP
 
 On your PC (where MediaMTX will run):
 ```bash
@@ -89,7 +121,7 @@ tailscale ip -4
 
 This will show something like `100.64.1.2` - use this as your `SERVER_IP`.
 
-### 3. Start Streaming from Raspberry Pi
+#### 3. Start Streaming from Raspberry Pi
 
 ```bash
 # On the Raspberry Pi
@@ -98,7 +130,7 @@ python3 stream_to_mediamtx.py 100.64.1.2 camera1
 
 Replace `100.64.1.2` with your actual Tailscale IP.
 
-### 4. Run on Boot (Optional)
+#### 4. Run on Boot (Optional)
 
 To automatically start streaming when the Pi boots:
 
