@@ -20,7 +20,7 @@ except ImportError:
 
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=640, height=480, fps=30, rtsp_port=8554):
+    def __init__(self, server_ip, stream_name, width=640, height=480, fps=30, rtsp_port=8554, device_id=None, password=None):
         """
         Initialize the RTSP camera streamer
 
@@ -31,9 +31,13 @@ class RTSPCameraStreamer:
             height: Video height in pixels
             fps: Frames per second
             rtsp_port: RTSP port on MediaMTX server (default: 8554)
+            device_id: Optional device identifier
+            password: Optional password for authentication
         """
         self.server_ip = server_ip
         self.stream_name = stream_name
+        self.device_id = device_id if device_id else stream_name
+        self.password = password if password else ""
         self.width = width
         self.height = height
         self.fps = fps
@@ -41,6 +45,7 @@ class RTSPCameraStreamer:
         # Use RTMP for publishing (port 1935), RTSP is for pulling
         self.publish_url = f"rtmp://{server_ip}:1935/{stream_name}"
         self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"  # For reference
+        self.orchestrator_url = f"http://{server_ip}:5000"
 
         self.picam2 = None
         self.cap = None
@@ -229,6 +234,34 @@ class RTSPCameraStreamer:
             elapsed = time.time() - start_time
             print(f"\nStreaming stopped: {frame_count} frames in {elapsed:.1f}s ({frame_count/elapsed:.1f} fps)")
 
+    def register_device(self):
+        """Register device information with the server"""
+        try:
+            import requests
+            import json
+
+            register_url = f"{self.orchestrator_url}/device/register"
+            payload = {
+                "stream_name": self.stream_name,
+                "device_id": self.device_id,
+                "password": self.password
+            }
+
+            print(f"Registering device with server...")
+            response = requests.post(register_url, json=payload, timeout=5)
+
+            if response.status_code == 200:
+                print(f"✓ Device registered: {self.device_id}")
+                return True
+            else:
+                print(f"⚠ Warning: Failed to register device (server returned {response.status_code})")
+                print(f"  Continuing anyway...")
+                return False
+        except Exception as e:
+            print(f"⚠ Warning: Could not register device: {e}")
+            print(f"  Continuing anyway...")
+            return False
+
     def start(self):
         """Start the streaming process"""
         print("=" * 60)
@@ -236,8 +269,12 @@ class RTSPCameraStreamer:
         print("=" * 60)
         print(f"Server: {self.server_ip}:{self.rtsp_port}")
         print(f"Stream: {self.stream_name}")
+        print(f"Device ID: {self.device_id}")
         print(f"RTSP URL: {self.rtsp_url}")
         print("=" * 60)
+
+        # Register device with server
+        self.register_device()
 
         if not self.setup_camera():
             print("✗ Failed to initialize camera")
@@ -329,6 +366,10 @@ Examples:
                        help='Frames per second (default: 30)')
     parser.add_argument('--port', type=int, default=8554,
                        help='RTSP port on MediaMTX server (default: 8554)')
+    parser.add_argument('--device-id', type=str, default=None,
+                       help='Device identifier (defaults to stream_name if not provided)')
+    parser.add_argument('--password', type=str, default='',
+                       help='Optional password for authentication')
 
     args = parser.parse_args()
 
@@ -339,7 +380,9 @@ Examples:
         width=args.width,
         height=args.height,
         fps=args.fps,
-        rtsp_port=args.port
+        rtsp_port=args.port,
+        device_id=args.device_id,
+        password=args.password
     )
 
     try:

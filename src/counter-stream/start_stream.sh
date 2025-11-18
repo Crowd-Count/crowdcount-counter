@@ -85,7 +85,12 @@ echo "============================================================"
 echo ""
 
 # Build command
-CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT"
+CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT --device-id $DEVICE_ID"
+
+# Add password if provided
+if [ -n "$PASSWORD" ]; then
+    CMD="$CMD --password $PASSWORD"
+fi
 
 # Start streaming
 echo "Starting stream..."
