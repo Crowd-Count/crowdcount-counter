@@ -68,9 +68,10 @@ class RTSPCameraStreamer:
         if self.check_libcamera_cameras():
             try:
                 self.picam2 = Picamera2()
-                # Configure camera for video capture
+                # Configure camera for video capture with framerate control
                 config = self.picam2.create_video_configuration(
-                    main={"size": (self.width, self.height), "format": "RGB888"}
+                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    controls={"FrameRate": self.fps}
                 )
                 self.picam2.configure(config)
                 self.picam2.start()
@@ -139,10 +140,11 @@ class RTSPCameraStreamer:
                 '-c:v', 'libx264',  # Use H.264 codec
                 '-preset', 'ultrafast',  # Fast encoding
                 '-tune', 'zerolatency',  # Low latency
+                '-threads', '0',  # Use all available CPU cores
                 '-b:v', '2M',  # Bitrate 2 Mbps
                 '-maxrate', '2M',
                 '-bufsize', '4M',
-                '-g', str(self.fps * 2),  # Keyframe interval (2 seconds)
+                '-g', str(self.fps),  # Keyframe interval (1 second for lower latency)
                 '-f', 'flv',  # FLV format for RTMP
                 self.publish_url
             ]
@@ -170,6 +172,8 @@ class RTSPCameraStreamer:
         """Capture frames and pipe them to ffmpeg"""
         frame_count = 0
         start_time = time.time()
+        frame_time = 1.0 / self.fps
+        next_frame_time = start_time
 
         try:
             while self.running:
@@ -211,8 +215,11 @@ class RTSPCameraStreamer:
                         print(f"✗ Error writing frame: {e}")
                         break
 
-                # Control frame rate (if camera is faster than target fps)
-                time.sleep(1.0 / self.fps)
+                # Smart frame rate control - only sleep if we're ahead of schedule
+                next_frame_time += frame_time
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
 
         except KeyboardInterrupt:
             print("\nReceived interrupt signal...")

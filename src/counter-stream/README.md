@@ -37,7 +37,39 @@ You'll need MediaMTX running on your PC - setup instructions will be provided se
 
 ## Usage
 
-### Basic Usage
+### Recommended: Using Configuration File
+
+The easiest way to start streaming is using the device configuration file:
+
+```bash
+# 1. Copy the template configuration file
+cp device-info.conf.template device-info.conf
+
+# 2. Edit with your device settings
+nano device-info.conf
+
+# 3. Start streaming
+./start_stream.sh
+```
+
+**Configuration file (`device-info.conf`):**
+```ini
+DEVICE_ID=crowdcount1        # Unique name for this camera
+SERVER_IP=100.93.86.117      # Your MediaMTX server's Tailscale IP
+RTSP_PORT=8554               # RTSP port (default: 8554)
+WIDTH=640                     # Video width
+HEIGHT=480                    # Video height
+FPS=30                        # Frames per second
+```
+
+This method is ideal for:
+- Setting up multiple Raspberry Pi cameras (each with its own config)
+- Running streams automatically on boot
+- Quick deployment without remembering command-line arguments
+
+### Basic Usage (Command Line)
+
+You can also run the stream script directly:
 
 ```bash
 python3 stream_to_mediamtx.py <SERVER_IP> <STREAM_NAME>
@@ -130,16 +162,18 @@ python3 stream_to_mediamtx.py 100.64.1.2 camera1
 
 Replace `100.64.1.2` with your actual Tailscale IP.
 
-#### 4. Run on Boot (Optional)
+## Run on Boot (Optional)
 
 To automatically start streaming when the Pi boots:
 
-1. Create a systemd service file:
+1. First, make sure your `device-info.conf` is configured correctly
+
+2. Create a systemd service file:
    ```bash
    sudo nano /etc/systemd/system/camera-stream.service
    ```
 
-2. Add this content (adjust paths and parameters):
+3. Add this content (adjust the path to your counter-stream directory):
    ```ini
    [Unit]
    Description=Camera Stream to MediaMTX
@@ -149,8 +183,8 @@ To automatically start streaming when the Pi boots:
    [Service]
    Type=simple
    User=pi
-   WorkingDirectory=/home/pi
-   ExecStart=/usr/bin/python3 /home/pi/stream_to_mediamtx.py 100.64.1.2 camera1
+   WorkingDirectory=/home/pi/counter-stream
+   ExecStart=/home/pi/counter-stream/start_stream.sh
    Restart=always
    RestartSec=10
 
@@ -158,16 +192,21 @@ To automatically start streaming when the Pi boots:
    WantedBy=multi-user.target
    ```
 
-3. Enable and start the service:
+4. Enable and start the service:
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable camera-stream.service
    sudo systemctl start camera-stream.service
    ```
 
-4. Check status:
+5. Check status:
    ```bash
    sudo systemctl status camera-stream.service
+   ```
+
+6. View logs:
+   ```bash
+   sudo journalctl -u camera-stream.service -f
    ```
 
 ## Troubleshooting
