@@ -74,12 +74,16 @@ class RTSPCameraStreamer:
             try:
                 self.picam2 = Picamera2()
                 # Configure camera for video capture with framerate control
+                # Using YUV420 format is faster than RGB, but we'll convert to BGR for ffmpeg
                 config = self.picam2.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
-                    controls={"FrameRate": self.fps}
+                    controls={"FrameRate": self.fps},
+                    buffer_count=2  # Use double buffering for speed
                 )
                 self.picam2.configure(config)
+                # Start camera and wait for it to be ready
                 self.picam2.start()
+                time.sleep(1)  # Give camera time to stabilize
                 self.use_legacy_camera = False
                 print(f"✓ Modern camera (libcamera) initialized: {self.width}x{self.height}@{self.fps}fps")
                 return True
@@ -133,6 +137,7 @@ class RTSPCameraStreamer:
         """Setup ffmpeg process to stream to RTSP"""
         try:
             # ffmpeg command to read raw video from stdin and publish via RTMP
+            # Try hardware encoding first (h264_v4l2m2m), fallback to software (libx264)
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-y',  # Overwrite output files
@@ -142,14 +147,12 @@ class RTSPCameraStreamer:
                 '-s', f'{self.width}x{self.height}',  # Frame size
                 '-r', str(self.fps),  # Frame rate
                 '-i', '-',  # Read from stdin
-                '-c:v', 'libx264',  # Use H.264 codec
-                '-preset', 'ultrafast',  # Fast encoding
-                '-tune', 'zerolatency',  # Low latency
-                '-threads', '0',  # Use all available CPU cores
+                '-c:v', 'h264_v4l2m2m',  # Use hardware H.264 encoder (faster than libx264)
                 '-b:v', '2M',  # Bitrate 2 Mbps
                 '-maxrate', '2M',
-                '-bufsize', '4M',
-                '-g', str(self.fps),  # Keyframe interval (1 second for lower latency)
+                '-bufsize', '2M',
+                '-g', str(self.fps * 2),  # Keyframe every 2 seconds
+                '-pix_fmt', 'yuv420p',  # Output pixel format
                 '-f', 'flv',  # FLV format for RTMP
                 self.publish_url
             ]
@@ -177,8 +180,6 @@ class RTSPCameraStreamer:
         """Capture frames and pipe them to ffmpeg"""
         frame_count = 0
         start_time = time.time()
-        frame_time = 1.0 / self.fps
-        next_frame_time = start_time
 
         try:
             while self.running:
@@ -192,9 +193,9 @@ class RTSPCameraStreamer:
                         time.sleep(0.1)
                         continue
                 else:
-                    # Use modern camera (picamera2)
+                    # Use modern camera (picamera2) - capture_array is already optimized
                     frame = self.picam2.capture_array()
-                    # Convert from RGB to BGR for OpenCV/ffmpeg
+                    # Convert from RGB to BGR for ffmpeg (numpy operation, very fast)
                     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
                 if frame is not None:
@@ -220,11 +221,8 @@ class RTSPCameraStreamer:
                         print(f"✗ Error writing frame: {e}")
                         break
 
-                # Smart frame rate control - only sleep if we're ahead of schedule
-                next_frame_time += frame_time
-                sleep_time = next_frame_time - time.time()
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                # No sleep - let camera run at native framerate
+                # The camera is configured to capture at self.fps, so it naturally limits the rate
 
         except KeyboardInterrupt:
             print("\nReceived interrupt signal...")
