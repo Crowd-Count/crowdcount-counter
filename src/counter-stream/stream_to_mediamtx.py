@@ -137,7 +137,7 @@ class RTSPCameraStreamer:
         """Setup ffmpeg process to stream to RTSP"""
         try:
             # ffmpeg command to read raw video from stdin and publish via RTMP
-            # Use software encoding (libx264) which is more compatible with MediaMTX
+            # Use MJPEG encoding - much lighter on CPU than H.264, perfect for Pi Zero 2W
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-y',  # Overwrite output files
@@ -147,20 +147,15 @@ class RTSPCameraStreamer:
                 '-s', f'{self.width}x{self.height}',  # Frame size
                 '-r', str(self.fps),  # Frame rate
                 '-i', '-',  # Read from stdin
-                '-c:v', 'libx264',  # Use H.264 codec (software, more compatible)
-                '-preset', 'ultrafast',  # Fast encoding
-                '-tune', 'zerolatency',  # Low latency
-                '-threads', '0',  # Use all available CPU cores
-                '-b:v', '2M',  # Bitrate 2 Mbps
-                '-maxrate', '2M',
-                '-bufsize', '4M',
-                '-g', str(self.fps * 2),  # Keyframe interval (2 seconds)
+                '-c:v', 'mjpeg',  # Use MJPEG codec (motion JPEG - lightweight)
+                '-q:v', '5',  # MJPEG quality (2=best, 31=worst, 5≈quality 80)
                 '-f', 'flv',  # FLV format for RTMP
                 self.publish_url
             ]
 
             print(f"Publishing stream to: {self.publish_url}")
             print(f"Stream will be available at: {self.rtsp_url}")
+            print("Using MJPEG encoding (optimized for low-power devices)")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
