@@ -42,9 +42,9 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
-        # Use RTSP for publishing (supports MJPEG)
-        self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
-        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        # Use RTMP for publishing (hardware H.264)
+        self.publish_url = f"rtmp://{server_ip}:1935/{stream_name}"
+        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"  # For viewing
         self.orchestrator_url = f"http://{server_ip}:5000"
 
         self.picam2 = None
@@ -134,10 +134,10 @@ class RTSPCameraStreamer:
         return False
 
     def setup_ffmpeg(self):
-        """Setup ffmpeg process to stream to RTSP"""
+        """Setup ffmpeg process to stream to RTMP"""
         try:
-            # ffmpeg command to read raw video from stdin and publish via RTSP
-            # Use MJPEG encoding - much lighter on CPU than H.264, perfect for Pi Zero 2W
+            # ffmpeg command to read raw video from stdin and publish via RTMP
+            # Use hardware H.264 encoding (h264_v4l2m2m) - low CPU usage for Pi Zero 2W
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-y',  # Overwrite output files
@@ -147,17 +147,19 @@ class RTSPCameraStreamer:
                 '-s', f'{self.width}x{self.height}',  # Frame size
                 '-r', str(self.fps),  # Frame rate
                 '-i', '-',  # Read from stdin
-                '-c:v', 'mjpeg',  # Use MJPEG codec (motion JPEG - lightweight)
-                '-pix_fmt', 'yuvj422p',  # 4:2:2 chroma subsampling (required for RTSP/RTP)
-                '-q:v', '5',  # MJPEG quality (2=best, 31=worst, 5≈quality 80)
-                '-f', 'rtsp',  # RTSP format (supports MJPEG)
-                '-rtsp_transport', 'tcp',  # Use TCP for reliability
+                '-c:v', 'h264_v4l2m2m',  # Hardware H.264 encoder
+                '-num_output_buffers', '32',  # Increase output buffers
+                '-num_capture_buffers', '16',  # Increase capture buffers
+                '-b:v', '1500k',  # Bitrate 1.5 Mbps (lower for Pi Zero 2W)
+                '-pix_fmt', 'yuv420p',  # Standard pixel format
+                '-g', str(self.fps * 2),  # Keyframe every 2 seconds
+                '-f', 'flv',  # FLV format for RTMP
                 self.publish_url
             ]
 
             print(f"Publishing stream to: {self.publish_url}")
             print(f"Stream will be available at: {self.rtsp_url}")
-            print("Using MJPEG encoding over RTSP (optimized for low-power devices)")
+            print("Using hardware H.264 encoding (h264_v4l2m2m)")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
