@@ -179,6 +179,7 @@ class RTSPCameraStreamer:
                 print(f"Publishing stream to: {self.publish_url}")
 
                 # Start ffmpeg process
+                # Note: We keep stderr as PIPE to capture errors, but won't block on it
                 self.ffmpeg_process = subprocess.Popen(
                     ffmpeg_cmd,
                     stdin=subprocess.PIPE,
@@ -186,6 +187,9 @@ class RTSPCameraStreamer:
                     stderr=subprocess.PIPE,
                     bufsize=10**8
                 )
+
+                # Store the command for debugging
+                self.ffmpeg_cmd = ' '.join(ffmpeg_cmd)
 
                 # Wait a moment to see if it fails immediately
                 time.sleep(0.5)
@@ -250,6 +254,12 @@ class RTSPCameraStreamer:
 
                     except BrokenPipeError:
                         print("✗ FFmpeg pipe broken - stream may have disconnected")
+                        # Try to get FFmpeg error
+                        if self.ffmpeg_process and self.ffmpeg_process.poll() is not None:
+                            stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
+                            if stderr:
+                                print("FFmpeg error output:")
+                                print(stderr[-1000:])  # Last 1000 chars
                         break
                     except Exception as e:
                         print(f"✗ Error writing frame: {e}")
