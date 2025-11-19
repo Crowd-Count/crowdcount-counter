@@ -77,8 +77,11 @@ class RTSPCameraStreamer:
                 # The hardware encoder handles everything - no CPU encoding needed!
                 config = self.picam2.create_video_configuration(
                     main={"size": (self.width, self.height)},
-                    controls={"FrameRate": self.fps},
-                    buffer_count=2
+                    controls={
+                        "FrameRate": self.fps,
+                        "FrameDurationLimits": (int(1000000 / self.fps), int(1000000 / self.fps))  # Enforce exact FPS
+                    },
+                    buffer_count=4  # Increased from 2 for better stability
                 )
                 self.picam2.configure(config)
                 self.picam2.start()
@@ -159,16 +162,19 @@ class RTSPCameraStreamer:
             else:
                 # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
                 # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
-                bitrate = 2000000  # 2 Mbps for 640p (adjust as needed)
+                bitrate = 2500000  # 2.5 Mbps for 640p @ 30fps (increased for better quality)
                 ffmpeg_cmd = [
                     'ffmpeg',
                     '-f', 'h264',  # Input is H.264 elementary stream
+                    '-r', str(self.fps),  # Force input framerate
                     '-i', '-',  # Read from stdin
                     '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
-                    '-fflags', 'nobuffer',  # Disable buffering for low latency
+                    '-fflags', 'nobuffer+flush_packets',  # Disable buffering + flush packets immediately
                     '-flags', 'low_delay',  # Low delay mode
+                    '-max_delay', '0',  # Minimum delay
+                    '-r', str(self.fps),  # Force output framerate
                     '-f', 'rtsp',  # RTSP format
-                    '-rtsp_transport', 'tcp',  # Use TCP for reliability
+                    '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
                     self.publish_url
                 ]
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
@@ -209,9 +215,9 @@ class RTSPCameraStreamer:
                     return
 
                 # Create H.264 encoder with appropriate bitrate
-                # For 640p: 1.5-4 Mbps is recommended, using 2 Mbps
-                bitrate = 2000000
-                encoder = H264Encoder(bitrate=bitrate)
+                # For 640p @ 30fps: 2.5 Mbps provides good quality without frame drops
+                bitrate = 2500000
+                encoder = H264Encoder(bitrate=bitrate, framerate=self.fps)
 
                 # Output directly to FFmpeg stdin
                 output = FileOutput(self.ffmpeg_process.stdin)
