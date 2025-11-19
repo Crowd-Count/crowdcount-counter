@@ -148,6 +148,7 @@ class RTSPCameraStreamer:
                 '-r', str(self.fps),  # Frame rate
                 '-i', '-',  # Read from stdin
                 '-c:v', 'mjpeg',  # Use MJPEG codec (motion JPEG - lightweight)
+                '-pix_fmt', 'yuvj422p',  # 4:2:2 chroma subsampling (required for RTSP/RTP)
                 '-q:v', '5',  # MJPEG quality (2=best, 31=worst, 5≈quality 80)
                 '-f', 'rtsp',  # RTSP format (supports MJPEG)
                 '-rtsp_transport', 'tcp',  # Use TCP for reliability
