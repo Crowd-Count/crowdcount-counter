@@ -135,84 +135,48 @@ class RTSPCameraStreamer:
 
     def setup_ffmpeg(self):
         """Setup ffmpeg process to stream to RTSP"""
-        # Try hardware encoding first, fallback to software
-        encoders_to_try = [
-            ('h264_v4l2m2m', 'Hardware H.264'),  # Hardware encoder
-            ('libx264', 'Software H.264')         # Software encoder (fallback)
-        ]
+        try:
+            # ffmpeg command to read raw video from stdin and publish via RTMP
+            # Use software encoding (libx264) which is more compatible with MediaMTX
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-y',  # Overwrite output files
+                '-f', 'rawvideo',  # Input format
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',  # OpenCV uses BGR format
+                '-s', f'{self.width}x{self.height}',  # Frame size
+                '-r', str(self.fps),  # Frame rate
+                '-i', '-',  # Read from stdin
+                '-c:v', 'libx264',  # Use H.264 codec (software, more compatible)
+                '-preset', 'ultrafast',  # Fast encoding
+                '-tune', 'zerolatency',  # Low latency
+                '-threads', '0',  # Use all available CPU cores
+                '-b:v', '2M',  # Bitrate 2 Mbps
+                '-maxrate', '2M',
+                '-bufsize', '4M',
+                '-g', str(self.fps * 2),  # Keyframe interval (2 seconds)
+                '-f', 'flv',  # FLV format for RTMP
+                self.publish_url
+            ]
 
-        for encoder, encoder_name in encoders_to_try:
-            try:
-                # Build ffmpeg command
-                ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-y',  # Overwrite output files
-                    '-f', 'rawvideo',  # Input format
-                    '-vcodec', 'rawvideo',
-                    '-pix_fmt', 'bgr24',  # OpenCV uses BGR format
-                    '-s', f'{self.width}x{self.height}',  # Frame size
-                    '-r', str(self.fps),  # Frame rate
-                    '-i', '-',  # Read from stdin
-                    '-c:v', encoder,  # Video encoder
-                ]
+            print(f"Publishing stream to: {self.publish_url}")
+            print(f"Stream will be available at: {self.rtsp_url}")
 
-                # Add encoder-specific settings
-                if encoder == 'libx264':
-                    ffmpeg_cmd.extend([
-                        '-preset', 'ultrafast',  # Fast encoding
-                        '-tune', 'zerolatency',  # Low latency
-                        '-threads', '0',  # Use all CPU cores
-                    ])
+            # Start ffmpeg process
+            self.ffmpeg_process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=10**8
+            )
 
-                # Common settings for both encoders
-                ffmpeg_cmd.extend([
-                    '-b:v', '2M',  # Bitrate 2 Mbps
-                    '-maxrate', '2M',
-                    '-bufsize', '2M',
-                    '-g', str(self.fps * 2),  # Keyframe every 2 seconds
-                    '-pix_fmt', 'yuv420p',  # Output pixel format
-                    '-f', 'flv',  # FLV format for RTMP
-                    self.publish_url
-                ])
+            print("✓ FFmpeg process started")
+            return True
 
-                print(f"Trying {encoder_name} encoder ({encoder})...")
-                print(f"Publishing stream to: {self.publish_url}")
-
-                # Start ffmpeg process
-                # Note: We keep stderr as PIPE to capture errors, but won't block on it
-                self.ffmpeg_process = subprocess.Popen(
-                    ffmpeg_cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    bufsize=10**8
-                )
-
-                # Store the command for debugging
-                self.ffmpeg_cmd = ' '.join(ffmpeg_cmd)
-
-                # Wait a moment to see if it fails immediately
-                time.sleep(0.5)
-                if self.ffmpeg_process.poll() is not None:
-                    # Process died immediately
-                    stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
-                    print(f"✗ {encoder_name} encoder failed")
-                    if encoder == encoders_to_try[-1][0]:  # Last encoder
-                        print(f"Error: {stderr[-500:]}")  # Show last 500 chars
-                    continue
-
-                print(f"✓ FFmpeg started with {encoder_name} encoder")
-                print(f"Stream will be available at: {self.rtsp_url}")
-                return True
-
-            except Exception as e:
-                print(f"✗ Error with {encoder_name} encoder: {e}")
-                if encoder == encoders_to_try[-1][0]:  # Last encoder
-                    return False
-                continue
-
-        print("✗ All encoders failed")
-        return False
+        except Exception as e:
+            print(f"✗ Error setting up ffmpeg: {e}")
+            return False
 
     def stream_frames(self):
         """Capture frames and pipe them to ffmpeg"""
