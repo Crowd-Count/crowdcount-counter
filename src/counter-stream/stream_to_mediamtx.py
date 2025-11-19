@@ -42,9 +42,9 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
-        # Use RTMP for publishing (port 1935), RTSP is for pulling
-        self.publish_url = f"rtmp://{server_ip}:1935/{stream_name}"
-        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"  # For reference
+        # Use RTSP for publishing (supports MJPEG)
+        self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.orchestrator_url = f"http://{server_ip}:5000"
 
         self.picam2 = None
@@ -136,7 +136,7 @@ class RTSPCameraStreamer:
     def setup_ffmpeg(self):
         """Setup ffmpeg process to stream to RTSP"""
         try:
-            # ffmpeg command to read raw video from stdin and publish via RTMP
+            # ffmpeg command to read raw video from stdin and publish via RTSP
             # Use MJPEG encoding - much lighter on CPU than H.264, perfect for Pi Zero 2W
             ffmpeg_cmd = [
                 'ffmpeg',
@@ -149,13 +149,14 @@ class RTSPCameraStreamer:
                 '-i', '-',  # Read from stdin
                 '-c:v', 'mjpeg',  # Use MJPEG codec (motion JPEG - lightweight)
                 '-q:v', '5',  # MJPEG quality (2=best, 31=worst, 5≈quality 80)
-                '-f', 'flv',  # FLV format for RTMP
+                '-f', 'rtsp',  # RTSP format (supports MJPEG)
+                '-rtsp_transport', 'tcp',  # Use TCP for reliability
                 self.publish_url
             ]
 
             print(f"Publishing stream to: {self.publish_url}")
             print(f"Stream will be available at: {self.rtsp_url}")
-            print("Using MJPEG encoding (optimized for low-power devices)")
+            print("Using MJPEG encoding over RTSP (optimized for low-power devices)")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
