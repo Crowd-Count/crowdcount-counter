@@ -69,23 +69,23 @@ class RTSPCameraStreamer:
 
     def setup_camera(self):
         """Initialize the Pi Camera - try libcamera first, then legacy"""
-        # First try libcamera (picamera2)
+        # First try libcamera (picamera2) with hardware H.264 encoding
         if self.check_libcamera_cameras():
             try:
                 self.picam2 = Picamera2()
-                # Configure camera for video capture with framerate control
-                # Using YUV420 format is faster than RGB, but we'll convert to BGR for ffmpeg
+                # Configure camera for H.264 video encoding
+                # The hardware encoder handles everything - no CPU encoding needed!
                 config = self.picam2.create_video_configuration(
-                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    main={"size": (self.width, self.height)},
                     controls={"FrameRate": self.fps},
-                    buffer_count=2  # Use double buffering for speed
+                    buffer_count=2
                 )
                 self.picam2.configure(config)
-                # Start camera and wait for it to be ready
                 self.picam2.start()
                 time.sleep(1)  # Give camera time to stabilize
                 self.use_legacy_camera = False
                 print(f"✓ Modern camera (libcamera) initialized: {self.width}x{self.height}@{self.fps}fps")
+                print("  Using hardware H.264 encoder (VideoCore IV GPU)")
                 return True
             except Exception as e:
                 print(f"Error initializing modern camera: {e}")
@@ -136,28 +136,46 @@ class RTSPCameraStreamer:
     def setup_ffmpeg(self):
         """Setup ffmpeg process to stream via RTSP"""
         try:
-            # ffmpeg command to read raw video from stdin and publish via RTSP
-            # Use MJPEG encoding - much lighter on CPU than H.264, perfect for Pi Zero 2W
-            ffmpeg_cmd = [
-                'ffmpeg',
-                '-re',  # Read input at native framerate
-                '-f', 'rawvideo',  # Input format
-                '-vcodec', 'rawvideo',
-                '-pix_fmt', 'bgr24',  # OpenCV uses BGR format
-                '-s', f'{self.width}x{self.height}',  # Frame size
-                '-r', str(self.fps),  # Frame rate
-                '-i', '-',  # Read from stdin
-                '-c:v', 'mjpeg',  # Use MJPEG codec (motion JPEG - lightweight)
-                '-pix_fmt', 'yuvj422p',  # 4:2:2 chroma subsampling (required for RTSP/RTP)
-                '-q:v', '5',  # MJPEG quality (2=best, 31=worst, 5≈quality 80)
-                '-f', 'rtsp',  # RTSP format
-                '-rtsp_transport', 'tcp',  # Use TCP for reliability
-                self.publish_url
-            ]
+            if self.use_legacy_camera:
+                # Legacy camera: Use MJPEG encoding (software, but lightweight)
+                ffmpeg_cmd = [
+                    'ffmpeg',
+                    '-f', 'rawvideo',
+                    '-vcodec', 'rawvideo',
+                    '-pix_fmt', 'bgr24',
+                    '-s', f'{self.width}x{self.height}',
+                    '-r', str(self.fps),
+                    '-i', '-',
+                    '-c:v', 'mjpeg',
+                    '-pix_fmt', 'yuvj422p',
+                    '-q:v', '5',
+                    '-fflags', 'nobuffer',
+                    '-flags', 'low_delay',
+                    '-f', 'rtsp',
+                    '-rtsp_transport', 'tcp',
+                    self.publish_url
+                ]
+                print("Using MJPEG encoding over RTSP (legacy camera)")
+            else:
+                # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
+                # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
+                bitrate = 2000000  # 2 Mbps for 640p (adjust as needed)
+                ffmpeg_cmd = [
+                    'ffmpeg',
+                    '-f', 'h264',  # Input is H.264 elementary stream
+                    '-i', '-',  # Read from stdin
+                    '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
+                    '-fflags', 'nobuffer',  # Disable buffering for low latency
+                    '-flags', 'low_delay',  # Low delay mode
+                    '-f', 'rtsp',  # RTSP format
+                    '-rtsp_transport', 'tcp',  # Use TCP for reliability
+                    self.publish_url
+                ]
+                print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
+                print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
             print(f"Publishing stream to: {self.publish_url}")
             print(f"Stream will be available at: {self.rtsp_url}")
-            print("Using MJPEG encoding over RTSP (optimized for low-power devices)")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
@@ -177,28 +195,66 @@ class RTSPCameraStreamer:
 
     def stream_frames(self):
         """Capture frames and pipe them to ffmpeg"""
-        frame_count = 0
         start_time = time.time()
 
         try:
-            while self.running:
-                frame = None
+            if not self.use_legacy_camera:
+                # Modern camera: Use hardware H.264 encoder
+                # Import encoder classes
+                try:
+                    from picamera2.encoders import H264Encoder
+                    from picamera2.outputs import FileOutput
+                except ImportError:
+                    print("✗ Error: picamera2 encoder not available")
+                    return
 
-                if self.use_legacy_camera:
-                    # Use legacy camera (OpenCV)
+                # Create H.264 encoder with appropriate bitrate
+                # For 640p: 1.5-4 Mbps is recommended, using 2 Mbps
+                bitrate = 2000000
+                encoder = H264Encoder(bitrate=bitrate)
+
+                # Output directly to FFmpeg stdin
+                output = FileOutput(self.ffmpeg_process.stdin)
+
+                # Start the encoder - this handles everything automatically!
+                self.picam2.start_encoder(encoder, output)
+                print(f"✓ Hardware encoder started ({bitrate/1000000:.1f} Mbps)")
+
+                # Monitor the stream (encoder runs in background)
+                last_status_time = time.time()
+                while self.running:
+                    # Check if FFmpeg is still alive
+                    if self.ffmpeg_process.poll() is not None:
+                        print("✗ FFmpeg process died")
+                        stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
+                        if stderr:
+                            print("FFmpeg error output:")
+                            print(stderr[-1000:])
+                        break
+
+                    # Print status every 5 seconds
+                    current_time = time.time()
+                    if current_time - last_status_time >= 5:
+                        elapsed = current_time - start_time
+                        print(f"Streaming: {elapsed:.1f}s elapsed, encoder running at {self.fps} fps")
+                        last_status_time = current_time
+
+                    time.sleep(1)
+
+                # Stop encoder
+                self.picam2.stop_encoder()
+
+            else:
+                # Legacy camera: Capture frames manually and encode with MJPEG
+                frame_count = 0
+                while self.running:
                     ret, frame = self.cap.read()
                     if not ret:
                         print("Failed to read frame from legacy camera")
                         time.sleep(0.1)
                         continue
-                else:
-                    # Use modern camera (picamera2) - capture_array is already optimized
-                    frame = self.picam2.capture_array()
-                    # Convert from RGB to BGR for ffmpeg (numpy operation, very fast)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-                if frame is not None:
-                    # Resize if needed (in case camera didn't set exact size)
+                    # Resize if needed
                     if frame.shape[1] != self.width or frame.shape[0] != self.height:
                         frame = cv2.resize(frame, (self.width, self.height))
 
@@ -215,19 +271,15 @@ class RTSPCameraStreamer:
 
                     except BrokenPipeError:
                         print("✗ FFmpeg pipe broken - stream may have disconnected")
-                        # Try to get FFmpeg error
                         if self.ffmpeg_process and self.ffmpeg_process.poll() is not None:
                             stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
                             if stderr:
                                 print("FFmpeg error output:")
-                                print(stderr[-1000:])  # Last 1000 chars
+                                print(stderr[-1000:])
                         break
                     except Exception as e:
                         print(f"✗ Error writing frame: {e}")
                         break
-
-                # No sleep - let camera run at native framerate
-                # The camera is configured to capture at self.fps, so it naturally limits the rate
 
         except KeyboardInterrupt:
             print("\nReceived interrupt signal...")
@@ -235,7 +287,7 @@ class RTSPCameraStreamer:
             print(f"✗ Error streaming frames: {e}")
         finally:
             elapsed = time.time() - start_time
-            print(f"\nStreaming stopped: {frame_count} frames in {elapsed:.1f}s ({frame_count/elapsed:.1f} fps)")
+            print(f"\nStreaming stopped after {elapsed:.1f}s")
 
     def register_device(self):
         """Register device information with the server"""
@@ -314,6 +366,11 @@ class RTSPCameraStreamer:
         # Close camera
         if self.picam2:
             try:
+                # Stop encoder if it's running
+                try:
+                    self.picam2.stop_encoder()
+                except:
+                    pass
                 self.picam2.stop()
                 self.picam2.close()
                 print("✓ Closed picamera2")
