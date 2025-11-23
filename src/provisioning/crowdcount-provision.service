@@ -1,0 +1,25 @@
+[Unit]
+Description=CrowdCount Device Provisioning Service
+After=bluetooth.target
+Wants=bluetooth.target
+ConditionPathExists=!/boot/provisioned
+ConditionPathExists=!/boot/firmware/provisioned
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/crowdcount-counter/src/provisioning
+ExecStart=/usr/bin/python3 /home/pi/crowdcount-counter/src/provisioning/provision_manager.py
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

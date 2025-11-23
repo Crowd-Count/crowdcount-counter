@@ -1,0 +1,21 @@
+# CrowdCount Device Identity
+# This file is written during manufacturing
+# Location: /boot/device-identity.conf or /boot/firmware/device-identity.conf
+#
+# DO NOT MODIFY THIS FILE - it contains factory-programmed device identity
+
+[DEFAULT]
+# Unique device identifier (printed on QR code)
+DEVICE_ID=CC-00001
+
+# Device secret for pairing (printed on QR code)
+DEVICE_SECRET=a1b2c3d4e5f6
+
+# Manufacturing information
+MANUFACTURING_DATE=2024-01-01
+MODEL=counter-v2
+HARDWARE_VERSION=1.0
+FIRMWARE_VERSION=1.0
+
+# Serial number (optional)
+SERIAL_NUMBER=SN123456789

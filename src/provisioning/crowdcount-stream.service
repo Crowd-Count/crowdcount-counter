@@ -1,0 +1,25 @@
+[Unit]
+Description=CrowdCount Camera Streaming Service
+After=network-online.target tailscaled.service crowdcount-provision.service
+Wants=network-online.target
+Requires=tailscaled.service
+ConditionPathExists=/boot/provisioned|/boot/firmware/provisioned
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/crowdcount-counter/src/counter-stream
+ExecStart=/bin/bash /home/pi/crowdcount-counter/src/counter-stream/start_stream.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Wait for provisioning to complete
+ExecStartPre=/bin/bash -c 'while [ ! -f /home/pi/crowdcount-counter/src/counter-stream/device-info.conf ]; do echo "Waiting for provisioning..."; sleep 5; done'
+
+[Install]
+WantedBy=multi-user.target
