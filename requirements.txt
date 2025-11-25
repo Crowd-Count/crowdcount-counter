@@ -1,0 +1,80 @@
+# CrowdCount Counter - Complete Python Dependencies
+# For Raspberry Pi Zero 2W with Global Shutter Camera
+#
+# NOTE: Some packages are best installed via apt on Raspberry Pi OS.
+# See INSTALL.md for complete installation instructions.
+
+# ============================================================
+# CAMERA & VIDEO PROCESSING
+# ============================================================
+
+# Picamera2 - Modern camera interface for Raspberry Pi
+# IMPORTANT: For Raspberry Pi OS, install via apt:
+#   sudo apt install -y python3-picamera2
+# This ensures hardware acceleration and proper integration
+picamera2>=0.3.12
+
+# OpenCV - Video processing and encoding
+# RECOMMENDED: Install via apt for better performance:
+#   sudo apt install -y python3-opencv
+# Or install via pip (may require compilation):
+opencv-python>=4.5.0
+
+# ============================================================
+# BLUETOOTH PROVISIONING (D-Bus/BlueZ)
+# ============================================================
+
+# D-Bus Python bindings for Bluetooth GATT server
+# REQUIRED: Install system dependencies first:
+#   sudo apt install -y python3-dbus libdbus-1-dev
+dbus-python>=1.2.18
+
+# PyGObject - GLib/GObject bindings for Bluetooth
+# REQUIRED: Install system dependencies first:
+#   sudo apt install -y python3-gi python3-gi-cairo gir1.2-gtk-3.0 libglib2.0-dev
+PyGObject>=3.42.0
+
+# ============================================================
+# NETWORK & HTTP
+# ============================================================
+
+# HTTP requests for device registration
+requests>=2.28.0
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Config file parsing (built-in but specified for completeness)
+configparser>=5.0.0
+
+# ============================================================
+# SYSTEM DEPENDENCIES (installed via apt)
+# ============================================================
+#
+# These must be installed on the Raspberry Pi via apt:
+#
+# Camera & Video:
+#   sudo apt install -y ffmpeg
+#   sudo apt install -y python3-picamera2
+#   sudo apt install -y python3-opencv
+#
+# Bluetooth:
+#   sudo apt install -y bluetooth bluez
+#   sudo apt install -y python3-dbus libdbus-1-dev
+#   sudo apt install -y python3-gi python3-gi-cairo gir1.2-gtk-3.0 libglib2.0-dev
+#
+# Networking:
+#   sudo apt install -y network-manager
+#   curl -fsSL https://tailscale.com/install.sh | sh
+#
+# Utilities:
+#   sudo apt install -y qrencode
+#
+# ============================================================
+
+# Development/Optional:
+# These are useful for development but not required for production
+
+# Type hints and better Python experience
+# typing-extensions>=4.0.0
