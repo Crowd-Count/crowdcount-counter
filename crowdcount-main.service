@@ -1,0 +1,23 @@
+[Unit]
+Description=CrowdCount Main Service (Provisioning + Streaming)
+After=network.target bluetooth.target
+Wants=network.target bluetooth.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/crowdcount-counter
+ExecStart=/usr/bin/python3 /home/pi/crowdcount-counter/crowdcount-main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Allow time for network to come up
+ExecStartPre=/bin/sleep 5
+
+[Install]
+WantedBy=multi-user.target
