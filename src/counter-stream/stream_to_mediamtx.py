@@ -52,6 +52,9 @@ class RTSPCameraStreamer:
         self.ffmpeg_process = None
         self.running = False
         self.use_legacy_camera = False
+        self.reconnection_enabled = True
+        self.reconnection_delay = 10  # seconds
+        self.shutdown_requested = False
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -228,7 +231,7 @@ class RTSPCameraStreamer:
 
                 # Monitor the stream (encoder runs in background)
                 last_status_time = time.time()
-                while self.running:
+                while self.running and not self.shutdown_requested:
                     # Check if FFmpeg is still alive
                     if self.ffmpeg_process.poll() is not None:
                         print("✗ FFmpeg process died")
@@ -253,7 +256,7 @@ class RTSPCameraStreamer:
             else:
                 # Legacy camera: Capture frames manually and encode with MJPEG
                 frame_count = 0
-                while self.running:
+                while self.running and not self.shutdown_requested:
                     ret, frame = self.cap.read()
                     if not ret:
                         print("Failed to read frame from legacy camera")
@@ -324,7 +327,7 @@ class RTSPCameraStreamer:
             return False
 
     def start(self):
-        """Start the streaming process"""
+        """Start the streaming process with automatic reconnection"""
         print("=" * 60)
         print("Raspberry Pi Camera to MediaMTX RTSP Streamer")
         print("=" * 60)
@@ -332,35 +335,93 @@ class RTSPCameraStreamer:
         print(f"Stream: {self.stream_name}")
         print(f"Device ID: {self.device_id}")
         print(f"RTSP URL: {self.rtsp_url}")
+        print(f"Auto-reconnect: Enabled (every {self.reconnection_delay}s)")
         print("=" * 60)
-
-        # Register device with server
-        self.register_device()
-
-        if not self.setup_camera():
-            print("✗ Failed to initialize camera")
-            return False
-
-        if not self.setup_ffmpeg():
-            print("✗ Failed to initialize ffmpeg")
-            self.cleanup()
-            return False
-
-        self.running = True
-        print("\n▶ Streaming started (Ctrl+C to stop)...\n")
 
         # Setup signal handlers for graceful shutdown
         def signal_handler(sig, frame):
             print("\n\nReceived shutdown signal...")
+            self.shutdown_requested = True
             self.running = False
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # Start streaming
-        self.stream_frames()
+        # Main connection loop with reconnection
+        attempt = 0
+        while not self.shutdown_requested:
+            attempt += 1
+            if attempt > 1:
+                print(f"\n{'=' * 60}")
+                print(f"Reconnection attempt #{attempt - 1}")
+                print(f"{'=' * 60}")
 
-        # Cleanup on exit
+            try:
+                # Register device with server
+                self.register_device()
+
+                # Setup camera
+                if not self.setup_camera():
+                    print("✗ Failed to initialize camera")
+                    if self.reconnection_enabled and not self.shutdown_requested:
+                        print(f"Retrying in {self.reconnection_delay} seconds...")
+                        for _ in range(self.reconnection_delay):
+                            if self.shutdown_requested:
+                                break
+                            time.sleep(1)
+                        continue
+                    else:
+                        return False
+
+                # Setup FFmpeg
+                if not self.setup_ffmpeg():
+                    print("✗ Failed to initialize ffmpeg")
+                    self.cleanup()
+                    if self.reconnection_enabled and not self.shutdown_requested:
+                        print(f"Retrying in {self.reconnection_delay} seconds...")
+                        for _ in range(self.reconnection_delay):
+                            if self.shutdown_requested:
+                                break
+                            time.sleep(1)
+                        continue
+                    else:
+                        return False
+
+                self.running = True
+                print("\n▶ Streaming started (Ctrl+C to stop)...\n")
+
+                # Start streaming
+                self.stream_frames()
+
+                # If we get here, streaming ended
+                if self.shutdown_requested:
+                    print("Shutdown requested, exiting...")
+                    break
+
+                # Connection lost - cleanup and retry if enabled
+                self.cleanup()
+                if self.reconnection_enabled:
+                    print(f"\n⚠ Connection lost. Reconnecting in {self.reconnection_delay} seconds...")
+                    for _ in range(self.reconnection_delay):
+                        if self.shutdown_requested:
+                            break
+                        time.sleep(1)
+                else:
+                    break
+
+            except Exception as e:
+                print(f"\n✗ Unexpected error: {e}")
+                self.cleanup()
+                if self.reconnection_enabled and not self.shutdown_requested:
+                    print(f"Retrying in {self.reconnection_delay} seconds...")
+                    for _ in range(self.reconnection_delay):
+                        if self.shutdown_requested:
+                            break
+                        time.sleep(1)
+                else:
+                    return False
+
+        # Final cleanup on exit
         self.cleanup()
         return True
 
