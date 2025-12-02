@@ -105,8 +105,10 @@ echo "============================================================"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     echo "Installing from requirements.txt..."
-    pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages 2>/dev/null || \
-        pip3 install -r "$SCRIPT_DIR/requirements.txt"
+    echo "Note: Heavy packages (opencv, picamera2, dbus, pygobject) already installed via apt"
+    echo "      Only installing lightweight packages (requests, configparser, etc.)"
+    echo "      Using --break-system-packages for Raspberry Pi OS"
+    sudo pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages
     echo "✓ Python dependencies installed"
 else
     echo "⚠ requirements.txt not found, skipping pip install"
