@@ -85,7 +85,8 @@ echo "============================================================"
 echo ""
 
 # Build command
-CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT --device-id $DEVICE_ID"
+# Note: $DEVICE_ID is used as both stream_name (positional arg) and device_id (defaults to stream_name if not specified)
+CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT"
 
 # Add password if provided
 if [ -n "$PASSWORD" ]; then

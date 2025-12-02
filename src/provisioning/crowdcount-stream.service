@@ -3,7 +3,8 @@ Description=CrowdCount Camera Streaming Service
 After=network-online.target tailscaled.service crowdcount-provision.service
 Wants=network-online.target
 Requires=tailscaled.service
-ConditionPathExists=/boot/provisioned|/boot/firmware/provisioned
+ConditionPathExists=/boot/provisioned
+ConditionPathExists=|/boot/firmware/provisioned
 
 [Service]
 Type=simple
