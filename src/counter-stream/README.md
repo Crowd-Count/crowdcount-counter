@@ -55,7 +55,7 @@ nano device-info.conf
 **Configuration file (`device-info.conf`):**
 ```ini
 DEVICE_ID=crowdcount1        # Unique name for this camera
-SERVER_IP=100.93.86.117      # Your MediaMTX server's Tailscale IP
+SERVER_IP=100.72.64.80       # Your MediaMTX server's Tailscale IP
 RTSP_PORT=8554               # RTSP port (default: 8554)
 WIDTH=640                     # Video width
 HEIGHT=480                    # Video height
@@ -77,21 +77,21 @@ python3 stream_to_mediamtx.py <SERVER_IP> <STREAM_NAME>
 
 **Example:**
 ```bash
-# Stream to MediaMTX server at Tailscale IP 100.64.1.2 with stream name 'camera1'
-python3 stream_to_mediamtx.py 100.64.1.2 camera1
+# Stream to MediaMTX server at Tailscale IP with stream name 'camera1'
+python3 stream_to_mediamtx.py 100.72.64.80 camera1
 ```
 
 ### Advanced Options
 
 ```bash
 # Custom resolution (720p)
-python3 stream_to_mediamtx.py 100.64.1.2 camera2 --width 1280 --height 720
+python3 stream_to_mediamtx.py 100.72.64.80 camera2 --width 1280 --height 720
 
 # Custom frame rate
-python3 stream_to_mediamtx.py 100.64.1.2 entrance --fps 25
+python3 stream_to_mediamtx.py 100.72.64.80 entrance --fps 25
 
 # Custom RTSP port
-python3 stream_to_mediamtx.py 100.64.1.2 counter1 --port 8555
+python3 stream_to_mediamtx.py 100.72.64.80 counter1 --port 8555
 ```
 
 ### Full Options
@@ -151,16 +151,16 @@ On your PC (where MediaMTX will run):
 tailscale ip -4
 ```
 
-This will show something like `100.64.1.2` - use this as your `SERVER_IP`.
+This will show something like `100.72.64.80` - use this as your `SERVER_IP`.
 
 #### 3. Start Streaming from Raspberry Pi
 
 ```bash
 # On the Raspberry Pi
-python3 stream_to_mediamtx.py 100.64.1.2 camera1
+python3 stream_to_mediamtx.py 100.72.64.80 camera1
 ```
 
-Replace `100.64.1.2` with your actual Tailscale IP.
+Replace `100.72.64.80` with your actual Tailscale IP.
 
 ## Run on Boot (Optional)
 

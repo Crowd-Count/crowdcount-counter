@@ -470,19 +470,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Stream to MediaMTX server at 100.64.1.2 with stream name 'camera1'
-  python3 stream_to_mediamtx.py 100.64.1.2 camera1
+  # Stream to MediaMTX server with stream name 'camera1'
+  python3 stream_to_mediamtx.py 100.72.64.80 camera1
 
   # Stream with custom resolution and fps
-  python3 stream_to_mediamtx.py 100.64.1.2 camera2 --width 1280 --height 720 --fps 25
+  python3 stream_to_mediamtx.py 100.72.64.80 camera2 --width 1280 --height 720 --fps 25
 
   # Use custom RTSP port
-  python3 stream_to_mediamtx.py 100.64.1.2 entrance --port 8555
+  python3 stream_to_mediamtx.py 100.72.64.80 entrance --port 8555
         """
     )
 
     parser.add_argument('server_ip',
-                       help='Tailscale IP address of MediaMTX server (e.g., 100.64.1.2)')
+                       help='Tailscale IP address of MediaMTX server (e.g., 100.72.64.80)')
     parser.add_argument('stream_name',
                        help='Unique name for this camera stream (e.g., camera1, entrance, counter1)')
     parser.add_argument('--width', type=int, default=640,
