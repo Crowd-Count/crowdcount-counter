@@ -9,11 +9,15 @@ import configparser
 from pathlib import Path
 
 # Possible locations for device identity file
+# Get the real user's home directory even when running with sudo
+_real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
+_user_home = os.path.expanduser(f'~{_real_user}') if _real_user else os.path.expanduser('~')
+
 IDENTITY_PATHS = [
-    os.path.expanduser('~/crowdcount-counter/boot/device-identity.conf'),  # Project directory - CHECK THIS FIRST
+    f'{_user_home}/crowdcount-counter/boot/device-identity.conf',  # Project directory - CHECK THIS FIRST
     '/boot/device-identity.conf',  # System boot partition
     '/boot/firmware/device-identity.conf',  # Pi 5 uses this
-    os.path.expanduser('~/device-identity.conf'),  # Development fallback
+    f'{_user_home}/device-identity.conf',  # Development fallback
 ]
 
 class DeviceIdentity:
