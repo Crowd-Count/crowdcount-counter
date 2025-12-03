@@ -10,10 +10,9 @@ from pathlib import Path
 
 # Possible locations for device identity file
 IDENTITY_PATHS = [
-    '/boot/device-identity.conf',
+    os.path.expanduser('~/crowdcount-counter/boot/device-identity.conf'),  # Project directory - CHECK THIS FIRST
+    '/boot/device-identity.conf',  # System boot partition
     '/boot/firmware/device-identity.conf',  # Pi 5 uses this
-    os.path.expanduser('~/crowdcount-counter/boot/device-identity.conf'),  # Project directory
-    '/media/boot/device-identity.conf',  # When SD card is mounted
     os.path.expanduser('~/device-identity.conf'),  # Development fallback
 ]
 

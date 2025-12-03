@@ -350,6 +350,10 @@ class Advertisement(dbus.service.Object):
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
+    @dbus.service.method(LE_ADVERTISEMENT_IFACE)
+    def Release(self):
+        print("Advertisement released")
+
     @dbus.service.method('org.freedesktop.DBus.Properties',
                         in_signature='s',
                         out_signature='a{sv}')
@@ -460,9 +464,9 @@ class BluetoothProvisioningServer:
         print("✓ Advertisement registered")
 
     def _register_ad_error_cb(self, error):
-        print(f"✗ Failed to register advertisement: {error}")
-        if self.mainloop:
-            self.mainloop.quit()
+        print(f"⚠ Failed to register advertisement: {error}")
+        print("  GATT server is still running - device may be discoverable without advertisement")
+        # Don't quit - GATT server is still functional
 
 
 if __name__ == "__main__":
