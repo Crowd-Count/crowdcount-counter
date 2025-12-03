@@ -101,6 +101,7 @@ echo "============================================================"
 echo "Step 6/8: Installing Python dependencies..."
 echo "============================================================"
 
+sudo apt install -y python3-pip
 # Check if requirements.txt exists
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
