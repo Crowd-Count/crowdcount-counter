@@ -406,25 +406,53 @@ class BluetoothProvisioningServer:
 
         print(f"   Adapter path: {adapter_path}")
 
-        # Get GATT and advertising managers
-        adapter = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
-                                'org.freedesktop.DBus.Properties')
+        # Get adapter interface for configuration
+        adapter_props = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
+                                       'org.freedesktop.DBus.Properties')
 
-        # Try to power on adapter (ignore if already powered)
+        adapter_obj = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
+                                     'org.bluez.Adapter1')
+
+        # Check current power state
         try:
-            powered = adapter.Get('org.bluez.Adapter1', 'Powered')
+            powered = adapter_props.Get('org.bluez.Adapter1', 'Powered')
             print(f"   Adapter powered: {powered}")
-            adapter.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
-        except dbus.exceptions.DBusException as e:
-            print(f"⚠ Bluetooth adapter power warning: {e}")
-            print("   Continuing anyway...")
+        except Exception as e:
+            print(f"   Could not check power state: {e}")
+            powered = False
 
-        # Check if adapter is discoverable
+        # Power on adapter if needed
+        if not powered:
+            print("   Powering on Bluetooth adapter...")
+            import subprocess
+            try:
+                # Try using rfkill first to unblock
+                subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)
+                time.sleep(1)
+
+                # Try bluetoothctl power on
+                subprocess.run(['bluetoothctl', 'power', 'on'], check=False, capture_output=True)
+                time.sleep(1)
+
+                # Verify it's on
+                powered = adapter_props.Get('org.bluez.Adapter1', 'Powered')
+                print(f"   Adapter powered after commands: {powered}")
+
+                if not powered:
+                    print("⚠ Warning: Could not power on adapter")
+            except Exception as e:
+                print(f"⚠ Error powering on adapter: {e}")
+
+        # Make adapter discoverable
         try:
-            discoverable = adapter.Get('org.bluez.Adapter1', 'Discoverable')
+            discoverable = adapter_props.Get('org.bluez.Adapter1', 'Discoverable')
             print(f"   Adapter discoverable: {discoverable}")
-        except:
-            pass
+            if not discoverable:
+                print("   Making adapter discoverable...")
+                adapter_props.Set('org.bluez.Adapter1', 'Discoverable', dbus.Boolean(True))
+                adapter_props.Set('org.bluez.Adapter1', 'DiscoverableTimeout', dbus.UInt32(0))
+        except Exception as e:
+            print(f"   Could not set discoverable: {e}")
 
         gatt_manager = dbus.Interface(
             self.bus.get_object(BLUEZ_SERVICE, adapter_path),
