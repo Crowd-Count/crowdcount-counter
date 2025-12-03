@@ -392,7 +392,13 @@ class BluetoothProvisioningServer:
         # Get GATT and advertising managers
         adapter = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
                                 'org.freedesktop.DBus.Properties')
-        adapter.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
+
+        # Try to power on adapter (ignore if already powered)
+        try:
+            adapter.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
+        except dbus.exceptions.DBusException as e:
+            print(f"⚠ Bluetooth adapter power warning: {e}")
+            print("   Continuing anyway...")
 
         gatt_manager = dbus.Interface(
             self.bus.get_object(BLUEZ_SERVICE, adapter_path),

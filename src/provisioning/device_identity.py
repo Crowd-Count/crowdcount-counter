@@ -12,6 +12,8 @@ from pathlib import Path
 IDENTITY_PATHS = [
     '/boot/device-identity.conf',
     '/boot/firmware/device-identity.conf',  # Pi 5 uses this
+    os.path.expanduser('~/crowdcount-counter/boot/device-identity.conf'),  # Project directory
+    '/media/boot/device-identity.conf',  # When SD card is mounted
     os.path.expanduser('~/device-identity.conf'),  # Development fallback
 ]
 
