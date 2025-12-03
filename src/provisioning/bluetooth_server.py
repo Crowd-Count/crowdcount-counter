@@ -129,8 +129,20 @@ class Characteristic(dbus.service.Object):
         self.service = service
         dbus.service.Object.__init__(self, bus, self.path)
 
-    @dbus.service.method(GATT_CHARACTERISTIC_IFACE,
-                        in_signature='a{sv}',
+    def get_properties(self):
+        return {
+            GATT_CHARACTERISTIC_IFACE: {
+                'Service': self.service.path,
+                'UUID': self.uuid,
+                'Flags': self.flags,
+            }
+        }
+
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties',
+                        in_signature='s',
                         out_signature='a{sv}')
     def GetAll(self, interface):
         if interface != GATT_CHARACTERISTIC_IFACE:
@@ -138,16 +150,14 @@ class Characteristic(dbus.service.Object):
                 'org.freedesktop.DBus.Error.InvalidArgs',
                 'Unknown interface')
 
-        return {
-            'Service': self.service.path,
-            'UUID': self.uuid,
-            'Flags': self.flags,
-        }
+        return self.get_properties()[GATT_CHARACTERISTIC_IFACE]
 
-    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, out_signature='s')
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE,
+                        in_signature='a{sv}',
+                        out_signature='ay')
     def ReadValue(self, options):
         print(f"ReadValue called on {self.uuid}")
-        return ""
+        return []
 
     @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='aya{sv}')
     def WriteValue(self, value, options):
@@ -267,6 +277,9 @@ class ProvisioningService(dbus.service.Object):
             }
         }
 
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
     @dbus.service.method('org.freedesktop.DBus.Properties',
                         in_signature='s',
                         out_signature='a{sv}')
@@ -302,15 +315,9 @@ class Application(dbus.service.Object):
         response = {}
 
         for service in self.services:
-            response[service.path] = service.get_properties()
+            response[service.get_path()] = service.get_properties()
             for char in service.characteristics:
-                response[char.path] = {
-                    GATT_CHARACTERISTIC_IFACE: {
-                        'Service': service.path,
-                        'UUID': char.uuid,
-                        'Flags': char.flags,
-                    }
-                }
+                response[char.get_path()] = char.get_properties()
 
         return response
 

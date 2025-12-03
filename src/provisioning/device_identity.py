@@ -57,7 +57,7 @@ class DeviceIdentity:
 
     def get_bluetooth_name(self):
         """Get the Bluetooth advertised name"""
-        return f"CrowdCount-{self.device_id}"
+        return f"CrowdCount: {self.device_id}"
 
     def validate_secret(self, provided_secret):
         """Validate the provided secret matches device secret"""
