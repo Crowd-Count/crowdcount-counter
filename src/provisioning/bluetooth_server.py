@@ -107,13 +107,18 @@ class ProvisioningData:
 
     def _check_complete(self):
         """Check if all required data has been received"""
+        # Only WiFi credentials and server IP are required
+        # Tailscale key is optional (device may already be configured)
         if (self.authenticated and
             self.wifi_ssid and
             self.wifi_password and
-            self.tailscale_auth_key and
             self.server_ip):
 
-            print("✓ All provisioning data received!")
+            print("✓ All required provisioning data received!")
+            if self.tailscale_auth_key:
+                print("   Tailscale key provided - will configure Tailscale")
+            else:
+                print("   No Tailscale key - skipping Tailscale configuration")
             # Trigger provisioning in a separate thread
             threading.Thread(target=self.on_complete, args=(self,), daemon=True).start()
 
