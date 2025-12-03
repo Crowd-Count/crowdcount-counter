@@ -340,6 +340,9 @@ class Advertisement(dbus.service.Object):
         }
         return properties
 
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
     @dbus.service.method('org.freedesktop.DBus.Properties',
                         in_signature='s',
                         out_signature='a{sv}')
