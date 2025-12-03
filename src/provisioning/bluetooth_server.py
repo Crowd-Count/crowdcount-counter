@@ -132,9 +132,9 @@ class Characteristic(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_CHARACTERISTIC_IFACE: {
-                'Service': self.service.path,
-                'UUID': self.uuid,
-                'Flags': self.flags,
+                'Service': dbus.ObjectPath(self.service.path),
+                'UUID': dbus.String(self.uuid),
+                'Flags': dbus.Array(self.flags, signature='s'),
             }
         }
 
@@ -269,10 +269,10 @@ class ProvisioningService(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_SERVICE_IFACE: {
-                'UUID': self.uuid,
-                'Primary': self.primary,
+                'UUID': dbus.String(self.uuid),
+                'Primary': dbus.Boolean(self.primary),
                 'Characteristics': dbus.Array(
-                    [char.path for char in self.characteristics],
+                    [dbus.ObjectPath(char.path) for char in self.characteristics],
                     signature='o')
             }
         }
