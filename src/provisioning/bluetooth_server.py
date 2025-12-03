@@ -404,16 +404,27 @@ class BluetoothProvisioningServer:
             print("✗ No Bluetooth adapter found")
             return False
 
+        print(f"   Adapter path: {adapter_path}")
+
         # Get GATT and advertising managers
         adapter = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
                                 'org.freedesktop.DBus.Properties')
 
         # Try to power on adapter (ignore if already powered)
         try:
+            powered = adapter.Get('org.bluez.Adapter1', 'Powered')
+            print(f"   Adapter powered: {powered}")
             adapter.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
         except dbus.exceptions.DBusException as e:
             print(f"⚠ Bluetooth adapter power warning: {e}")
             print("   Continuing anyway...")
+
+        # Check if adapter is discoverable
+        try:
+            discoverable = adapter.Get('org.bluez.Adapter1', 'Discoverable')
+            print(f"   Adapter discoverable: {discoverable}")
+        except:
+            pass
 
         gatt_manager = dbus.Interface(
             self.bus.get_object(BLUEZ_SERVICE, adapter_path),
@@ -423,14 +434,29 @@ class BluetoothProvisioningServer:
             self.bus.get_object(BLUEZ_SERVICE, adapter_path),
             LE_ADVERTISING_MANAGER_IFACE)
 
+        # Check for existing advertisements
+        try:
+            remote_om = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, '/'),
+                                       'org.freedesktop.DBus.ObjectManager')
+            objects = remote_om.GetManagedObjects()
+            print("   Checking for existing advertisements...")
+            for path, interfaces in objects.items():
+                if LE_ADVERTISEMENT_IFACE in interfaces:
+                    print(f"   Found existing advertisement at: {path}")
+        except Exception as e:
+            print(f"   Could not check existing ads: {e}")
+
         # Register GATT application
         app = Application(self.bus, self.provisioning_data)
+        print(f"   Registering GATT app at path: {app.get_path()}")
         gatt_manager.RegisterApplication(app.get_path(), {},
                                         reply_handler=self._register_app_cb,
                                         error_handler=self._register_app_error_cb)
 
         # Register advertisement
         adv = Advertisement(self.bus, 0, self.device_identity.get_bluetooth_name())
+        print(f"   Registering advertisement at path: {adv.get_path()}")
+        print(f"   Advertisement properties: {adv.get_properties()}")
         ad_manager.RegisterAdvertisement(adv.get_path(), {},
                                         reply_handler=self._register_ad_cb,
                                         error_handler=self._register_ad_error_cb)
@@ -466,6 +492,9 @@ class BluetoothProvisioningServer:
 
     def _register_ad_error_cb(self, error):
         print(f"⚠ Failed to register advertisement: {error}")
+        print(f"   Error type: {type(error)}")
+        print(f"   Error name: {getattr(error, 'get_dbus_name', lambda: 'N/A')()}")
+        print(f"   Error message: {getattr(error, 'get_dbus_message', lambda: 'N/A')()}")
         print("  GATT server is still running - device may be discoverable without advertisement")
         # Don't quit - GATT server is still functional
 
