@@ -81,7 +81,7 @@ curl -fsSL https://tailscale.com/install.sh | sh
 ### 4. Install Python Dependencies
 
 ```bash
-cd /home/pi/crowdcount-counter
+cd /home/counter/crowdcount-counter
 
 # Install Python packages
 # Note: Many packages are already installed via apt,
@@ -91,12 +91,19 @@ pip3 install -r requirements.txt
 
 ### 5. Clone/Copy Project Files
 
+**Standard Installation Directory**: `/home/counter/crowdcount-counter`
+
+**Note**: All CrowdCount devices use:
+- Username: `counter`
+- Hostname: Device ID (e.g., `T0002`)
+- Format: `counter@T0002`
+
 ```bash
 # If using git
-git clone <repository-url> /home/pi/crowdcount-counter
+git clone <repository-url> /home/counter/crowdcount-counter
 
 # Or copy files manually via scp/rsync
-# Make sure all files are in /home/pi/crowdcount-counter/
+# Make sure all files are in /home/counter/crowdcount-counter/
 ```
 
 ### 6. Create Device Identity File
@@ -129,7 +136,7 @@ sudo systemctl start bluetooth
 ### 8. Install Main Service
 
 ```bash
-cd /home/pi/crowdcount-counter
+cd /home/counter/crowdcount-counter
 sudo ./install_main_service.sh
 ```
 

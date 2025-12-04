@@ -18,16 +18,36 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Get the directory where this script is located
+# Standard installation directory for all counters
+STANDARD_DIR="/home/counter/crowdcount-counter"
+
+# Get the directory where this script is located (absolute path)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Verify we're in the standard location
+if [ "$SCRIPT_DIR" != "$STANDARD_DIR" ]; then
+    echo "⚠ Warning: Installation directory mismatch!"
+    echo "  Current:  $SCRIPT_DIR"
+    echo "  Expected: $STANDARD_DIR"
+    echo ""
+    echo "All CrowdCount counters should be installed at: $STANDARD_DIR"
+    echo "Continue anyway? (y/n)"
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
 MAIN_SCRIPT="$SCRIPT_DIR/crowdcount-main.py"
-SERVICE_FILE="$SCRIPT_DIR/crowdcount-main.service"
+SERVICE_TEMPLATE="$SCRIPT_DIR/crowdcount-main.service"
 SYSTEMD_DIR="/etc/systemd/system"
+SERVICE_FILE="$SYSTEMD_DIR/crowdcount-main.service"
 
 echo "Configuration:"
+echo "  User:             counter"
 echo "  Script Directory: $SCRIPT_DIR"
 echo "  Main Script:      $MAIN_SCRIPT"
-echo "  Service File:     $SERVICE_FILE"
+echo "  Service Template: $SERVICE_TEMPLATE"
 echo ""
 
 # Verify files exist
@@ -36,8 +56,8 @@ if [ ! -f "$MAIN_SCRIPT" ]; then
     exit 1
 fi
 
-if [ ! -f "$SERVICE_FILE" ]; then
-    echo "✗ Error: Service file not found: $SERVICE_FILE"
+if [ ! -f "$SERVICE_TEMPLATE" ]; then
+    echo "✗ Error: Service template not found: $SERVICE_TEMPLATE"
     exit 1
 fi
 
@@ -59,10 +79,40 @@ done
 echo "✓ Old services disabled"
 echo ""
 
-# Copy service file to systemd directory
+# Generate service file with correct paths
 echo "Step 3/5: Installing systemd service..."
-cp "$SERVICE_FILE" "$SYSTEMD_DIR/crowdcount-main.service"
-echo "✓ Service file installed to $SYSTEMD_DIR"
+echo "Generating service file with paths:"
+echo "  Working Directory: $SCRIPT_DIR"
+echo "  Exec Start: $MAIN_SCRIPT"
+
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=CrowdCount Main Service (Provisioning + Streaming)
+After=network-online.target bluetooth.target tailscaled.service
+Wants=network-online.target bluetooth.target
+Requires=tailscaled.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=/usr/bin/python3 $MAIN_SCRIPT
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Allow time for network to come up
+ExecStartPre=/bin/sleep 5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "✓ Service file installed to $SERVICE_FILE"
 echo ""
 
 # Reload systemd daemon

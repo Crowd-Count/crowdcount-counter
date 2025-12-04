@@ -7,8 +7,8 @@ Requires=tailscaled.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/pi/crowdcount-counter
-ExecStart=/usr/bin/python3 /home/pi/crowdcount-counter/crowdcount-main.py
+WorkingDirectory=/home/counter/crowdcount-counter
+ExecStart=/usr/bin/python3 /home/counter/crowdcount-counter/crowdcount-main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

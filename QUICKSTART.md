@@ -2,6 +2,14 @@
 
 **One-command setup for Raspberry Pi Zero 2W with Global Shutter Camera**
 
+## Device Standard
+
+**All CrowdCount counter devices follow this format:**
+- **Username**: `counter` (always)
+- **Hostname**: Device ID (e.g., `T0002`, `T0001`, etc.)
+- **Format**: `counter@T0002`
+- **Installation Path**: `/home/counter/crowdcount-counter`
+
 ## Prerequisites
 
 - Raspberry Pi Zero 2W (or similar)
@@ -9,13 +17,14 @@
 - Fresh Raspberry Pi OS installation (Bookworm or later)
 - Internet connection
 - SSH or direct terminal access
+- User account created as `counter`
 
 ## One-Command Setup
 
 Run this single command to install and configure everything:
 
 ```bash
-cd /home/pi/crowdcount-counter
+cd /home/counter/crowdcount-counter
 ./setup_all.sh
 ```
 
@@ -38,7 +47,7 @@ This script will automatically:
 Edit the device configuration file:
 
 ```bash
-nano /home/pi/crowdcount-counter/src/counter-stream/device-info.conf
+nano /home/counter/crowdcount-counter/src/counter-stream/device-info.conf
 ```
 
 **Required settings:**
@@ -190,10 +199,10 @@ ip route show default
 
 ```bash
 # Verify configuration file exists
-cat /home/pi/crowdcount-counter/src/counter-stream/device-info.conf
+cat /home/counter/crowdcount-counter/src/counter-stream/device-info.conf
 
 # Re-create from template if needed
-cd /home/pi/crowdcount-counter/src/counter-stream
+cd /home/counter/crowdcount-counter/src/counter-stream
 cp device-info.conf.template device-info.conf
 nano device-info.conf
 ```
