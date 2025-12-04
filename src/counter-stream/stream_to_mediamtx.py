@@ -20,7 +20,7 @@ except ImportError:
 
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=640, height=480, fps=30, rtsp_port=8554, device_id=None, password=None):
+    def __init__(self, server_ip, stream_name, width=640, height=480, fps=30, rtsp_port=8554, device_id=None, password=None, api_url=None):
         """
         Initialize the RTSP camera streamer
 
@@ -33,6 +33,7 @@ class RTSPCameraStreamer:
             rtsp_port: RTSP port on MediaMTX server (default: 8554)
             device_id: Optional device identifier
             password: Optional password for authentication
+            api_url: Optional CrowdCount API URL for status updates
         """
         self.server_ip = server_ip
         self.stream_name = stream_name
@@ -46,6 +47,7 @@ class RTSPCameraStreamer:
         self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.orchestrator_url = f"http://{server_ip}:5000"
+        self.api_url = api_url if api_url else "https://api.crowdcount.tech"
 
         self.picam2 = None
         self.cap = None
@@ -55,6 +57,10 @@ class RTSPCameraStreamer:
         self.reconnection_enabled = True
         self.reconnection_delay = 10  # seconds
         self.shutdown_requested = False
+        self.last_health_check = 0
+        self.health_check_interval = 30  # seconds
+        self.last_status_update = 0
+        self.status_update_interval = 60  # seconds
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -241,8 +247,21 @@ class RTSPCameraStreamer:
                             print(stderr[-1000:])
                         break
 
-                    # Print status every 5 seconds
                     current_time = time.time()
+
+                    # Periodic health check
+                    if current_time - self.last_health_check >= self.health_check_interval:
+                        if not self.check_server_health():
+                            print("✗ Server health check failed - connection may be lost")
+                            break
+                        self.last_health_check = current_time
+
+                    # Periodic status update
+                    if current_time - self.last_status_update >= self.status_update_interval:
+                        self.update_device_status("online")
+                        self.last_status_update = current_time
+
+                    # Print status every 5 seconds
                     if current_time - last_status_time >= 5:
                         elapsed = current_time - start_time
                         print(f"Streaming: {elapsed:.1f}s elapsed, encoder running at {self.fps} fps")
@@ -298,6 +317,51 @@ class RTSPCameraStreamer:
             elapsed = time.time() - start_time
             print(f"\nStreaming stopped after {elapsed:.1f}s")
 
+    def check_server_health(self):
+        """Check if the server is reachable and healthy"""
+        try:
+            import requests
+
+            # Try to reach the orchestrator API
+            health_url = f"{self.orchestrator_url}/status"
+            response = requests.get(health_url, timeout=3)
+
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"⚠ Server health check failed: HTTP {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"⚠ Server health check failed: {e}")
+            return False
+
+    def update_device_status(self, status):
+        """Update device online/offline status with the API"""
+        if not self.password:
+            return False  # Can't update status without credentials
+
+        try:
+            import requests
+
+            status_url = f"{self.api_url}/update_status"
+            data = {
+                'user_id': self.device_id,
+                'password': self.password,
+                'status': status
+            }
+
+            response = requests.post(status_url, data=data, timeout=5)
+
+            if response.status_code == 200:
+                print(f"✓ Device status updated to '{status}'")
+                return True
+            else:
+                print(f"⚠ Failed to update status: HTTP {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"⚠ Failed to update status: {e}")
+            return False
+
     def register_device(self):
         """Register device information with the server"""
         try:
@@ -316,6 +380,8 @@ class RTSPCameraStreamer:
 
             if response.status_code == 200:
                 print(f"✓ Device registered: {self.device_id}")
+                # Update API status to online
+                self.update_device_status("online")
                 return True
             else:
                 print(f"⚠ Warning: Failed to register device (server returned {response.status_code})")
@@ -430,6 +496,15 @@ class RTSPCameraStreamer:
         print("\nCleaning up...")
         self.running = False
 
+        # Update device status to offline
+        if not self.shutdown_requested:
+            # Only mark as offline if not a normal shutdown
+            # (normal shutdown will be followed by reconnection)
+            pass
+        else:
+            # Graceful shutdown - mark as offline
+            self.update_device_status("offline")
+
         # Close camera
         if self.picam2:
             try:
@@ -497,6 +572,8 @@ Examples:
                        help='Device identifier (defaults to stream_name if not provided)')
     parser.add_argument('--password', type=str, default='',
                        help='Optional password for authentication')
+    parser.add_argument('--api-url', type=str, default='https://api.crowdcount.tech',
+                       help='CrowdCount API URL for status updates (default: https://api.crowdcount.tech)')
 
     args = parser.parse_args()
 
@@ -509,7 +586,8 @@ Examples:
         fps=args.fps,
         rtsp_port=args.port,
         device_id=args.device_id,
-        password=args.password
+        password=args.password,
+        api_url=args.api_url
     )
 
     try:

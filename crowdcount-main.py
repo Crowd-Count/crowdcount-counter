@@ -32,16 +32,46 @@ class CrowdCountMain:
         self.current_process = None
 
     def check_wifi_connected(self):
-        """Check if WiFi is currently connected"""
+        """Check if WiFi is currently connected using multiple methods"""
+        # Method 1: Try NetworkManager (most reliable on modern systems)
+        try:
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'STATE', 'general'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0:
+                state = result.stdout.strip()
+                if state in ['connected', 'connected (site only)', 'connected (local only)']:
+                    # Get SSID from NetworkManager
+                    try:
+                        ssid_result = subprocess.run(
+                            ['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'],
+                            capture_output=True,
+                            timeout=5,
+                            text=True
+                        )
+                        for line in ssid_result.stdout.strip().split('\n'):
+                            if line.startswith('yes:'):
+                                ssid = line.split(':', 1)[1]
+                                return True, ssid if ssid else "unknown"
+                    except:
+                        pass
+                    return True, "unknown"
+        except FileNotFoundError:
+            pass  # nmcli not available, try next method
+        except Exception:
+            pass
+
+        # Method 2: Try iwgetid (classic method)
         try:
             result = subprocess.run(
                 ['iwgetid'],
                 capture_output=True,
                 timeout=5
             )
-            connected = result.returncode == 0
-
-            if connected:
+            if result.returncode == 0:
                 # Get SSID for display
                 try:
                     ssid = subprocess.run(
@@ -50,14 +80,69 @@ class CrowdCountMain:
                         timeout=5,
                         text=True
                     ).stdout.strip()
-                    return True, ssid
+                    return True, ssid if ssid else "unknown"
                 except:
                     return True, "unknown"
+        except FileNotFoundError:
+            pass  # iwgetid not available, try next method
+        except Exception:
+            pass
 
-            return False, None
-        except Exception as e:
-            print(f"⚠ Error checking WiFi: {e}")
-            return False, None
+        # Method 3: Check default route (indicates internet connectivity)
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Has default route - likely connected
+                # Try to get WiFi info
+                ssid = self._get_ssid_from_wpa()
+                return True, ssid if ssid else "unknown"
+        except Exception:
+            pass
+
+        # Method 4: Check wpa_supplicant status
+        try:
+            result = subprocess.run(
+                ['wpa_cli', 'status'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.startswith('wpa_state='):
+                        state = line.split('=', 1)[1]
+                        if state == 'COMPLETED':
+                            ssid = self._get_ssid_from_wpa()
+                            return True, ssid if ssid else "unknown"
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        # All methods failed
+        return False, None
+
+    def _get_ssid_from_wpa(self):
+        """Get SSID from wpa_supplicant"""
+        try:
+            result = subprocess.run(
+                ['wpa_cli', 'status'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.startswith('ssid='):
+                        return line.split('=', 1)[1]
+        except:
+            pass
+        return None
 
     def is_provisioned(self):
         """Check if device has been provisioned"""
@@ -66,6 +151,31 @@ class CrowdCountMain:
     def has_device_config(self):
         """Check if device configuration exists"""
         return DEVICE_CONFIG.exists()
+
+    def check_tailscale_connected(self):
+        """Check if Tailscale is running and connected"""
+        try:
+            result = subprocess.run(
+                ['tailscale', 'status', '--json'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0:
+                import json
+                status = json.loads(result.stdout)
+                # Check if we have a valid backend state
+                backend_state = status.get('BackendState', '')
+                if backend_state == 'Running':
+                    # Get our Tailscale IP
+                    self_peer = status.get('Self', {})
+                    tailscale_ips = self_peer.get('TailscaleIPs', [])
+                    if tailscale_ips:
+                        return True, tailscale_ips[0]
+                return False, None
+        except Exception as e:
+            print(f"⚠ Error checking Tailscale: {e}")
+            return False, None
 
     def run_provisioning(self):
         """Run the provisioning process"""
@@ -170,9 +280,11 @@ class CrowdCountMain:
             wifi_connected, ssid = self.check_wifi_connected()
             is_provisioned = self.is_provisioned()
             has_config = self.has_device_config()
+            tailscale_connected, tailscale_ip = self.check_tailscale_connected()
 
             print(f"Status Check:")
             print(f"  WiFi Connected: {wifi_connected} {f'({ssid})' if ssid else ''}")
+            print(f"  Tailscale: {tailscale_connected} {f'({tailscale_ip})' if tailscale_ip else ''}")
             print(f"  Provisioned: {is_provisioned}")
             print(f"  Config Exists: {has_config}")
             print()
@@ -195,7 +307,13 @@ class CrowdCountMain:
                     continue
 
             elif wifi_connected and is_provisioned and has_config:
-                # Connected and ready → stream
+                # Connected and ready → check Tailscale, then stream
+                if not tailscale_connected:
+                    print("Decision: WiFi connected but Tailscale not ready")
+                    print("Waiting for Tailscale to connect...")
+                    time.sleep(5)
+                    continue
+
                 print("Decision: Starting streaming")
                 success = self.run_streaming()
 

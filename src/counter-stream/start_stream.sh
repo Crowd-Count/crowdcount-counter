@@ -59,6 +59,7 @@ WIDTH=$(get_config_value "WIDTH" "640")
 HEIGHT=$(get_config_value "HEIGHT" "480")
 FPS=$(get_config_value "FPS" "30")
 PASSWORD=$(get_config_value "PASSWORD" "")
+API_URL=$(get_config_value "API_URL" "https://api.crowdcount.tech")
 
 # Validate required settings
 if [ -z "$DEVICE_ID" ]; then
@@ -91,6 +92,11 @@ CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGH
 # Add password if provided
 if [ -n "$PASSWORD" ]; then
     CMD="$CMD --password $PASSWORD"
+fi
+
+# Add API URL if provided
+if [ -n "$API_URL" ]; then
+    CMD="$CMD --api-url $API_URL"
 fi
 
 # Start streaming

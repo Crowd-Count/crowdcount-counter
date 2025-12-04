@@ -37,14 +37,14 @@ fi
 
 # Update package list
 echo "============================================================"
-echo "Step 1/8: Updating package list..."
+echo "Step 1/10: Updating package list..."
 echo "============================================================"
 sudo apt update
 
 # Install camera & video dependencies
 echo ""
 echo "============================================================"
-echo "Step 2/8: Installing camera & video dependencies..."
+echo "Step 2/10: Installing camera & video dependencies..."
 echo "============================================================"
 sudo apt install -y \
     ffmpeg \
@@ -56,7 +56,7 @@ echo "✓ Camera & video dependencies installed"
 # Install Bluetooth dependencies
 echo ""
 echo "============================================================"
-echo "Step 3/8: Installing Bluetooth dependencies..."
+echo "Step 3/10: Installing Bluetooth dependencies..."
 echo "============================================================"
 sudo apt install -y \
     bluetooth \
@@ -73,7 +73,7 @@ echo "✓ Bluetooth dependencies installed"
 # Install networking dependencies
 echo ""
 echo "============================================================"
-echo "Step 4/8: Installing networking dependencies..."
+echo "Step 4/10: Installing networking dependencies..."
 echo "============================================================"
 sudo apt install -y \
     network-manager \
@@ -84,7 +84,7 @@ echo "✓ Networking dependencies installed"
 # Install Tailscale
 echo ""
 echo "============================================================"
-echo "Step 5/8: Installing Tailscale..."
+echo "Step 5/10: Installing Tailscale..."
 echo "============================================================"
 if command -v tailscale &> /dev/null; then
     echo "✓ Tailscale is already installed"
@@ -98,7 +98,7 @@ fi
 # Install Python dependencies
 echo ""
 echo "============================================================"
-echo "Step 6/8: Installing Python dependencies..."
+echo "Step 6/10: Installing Python dependencies..."
 echo "============================================================"
 
 sudo apt install -y python3-pip
@@ -118,16 +118,34 @@ fi
 # Enable Bluetooth service
 echo ""
 echo "============================================================"
-echo "Step 7/8: Enabling Bluetooth service..."
+echo "Step 7/10: Enabling Bluetooth service..."
 echo "============================================================"
 sudo systemctl enable bluetooth
 sudo systemctl start bluetooth
 echo "✓ Bluetooth service enabled and started"
 
+# Enable Tailscale service
+echo ""
+echo "============================================================"
+echo "Step 8/10: Enabling Tailscale to start on boot..."
+echo "============================================================"
+if command -v tailscale &> /dev/null; then
+    sudo systemctl enable tailscaled
+    sudo systemctl start tailscaled
+    echo "✓ Tailscale service enabled and started"
+    echo ""
+    echo "⚠ NOTE: You need to authenticate Tailscale with:"
+    echo "   sudo tailscale up"
+    echo ""
+    echo "Or if you want to authenticate later, it will be done during first boot."
+else
+    echo "⚠ Tailscale not installed, skipping"
+fi
+
 # Check device identity
 echo ""
 echo "============================================================"
-echo "Step 8/8: Checking device identity..."
+echo "Step 9/10: Checking device identity..."
 echo "============================================================"
 
 IDENTITY_FOUND=false
@@ -153,6 +171,39 @@ if [ "$IDENTITY_FOUND" = false ]; then
     echo "  MODEL=counter-v2"
     echo ""
     echo "For development, the system will use default values."
+fi
+
+# Setup device configuration
+echo ""
+echo "============================================================"
+echo "Step 10/10: Setting up device configuration..."
+echo "============================================================"
+
+DEVICE_CONFIG_DIR="$SCRIPT_DIR/src/counter-stream"
+DEVICE_CONFIG="$DEVICE_CONFIG_DIR/device-info.conf"
+DEVICE_CONFIG_TEMPLATE="$DEVICE_CONFIG_DIR/device-info.conf.template"
+
+if [ -f "$DEVICE_CONFIG" ]; then
+    echo "✓ Device configuration already exists: $DEVICE_CONFIG"
+    echo ""
+    echo "Current configuration:"
+    cat "$DEVICE_CONFIG"
+else
+    if [ -f "$DEVICE_CONFIG_TEMPLATE" ]; then
+        echo "Creating device configuration from template..."
+        cp "$DEVICE_CONFIG_TEMPLATE" "$DEVICE_CONFIG"
+        echo "✓ Created: $DEVICE_CONFIG"
+        echo ""
+        echo "⚠ IMPORTANT: Edit this file with your device settings:"
+        echo "   nano $DEVICE_CONFIG"
+        echo ""
+        echo "You need to configure:"
+        echo "  - DEVICE_ID (unique identifier)"
+        echo "  - SERVER_IP (your server's Tailscale IP)"
+        echo "  - PASSWORD (for API status updates)"
+    else
+        echo "⚠ Warning: Template not found: $DEVICE_CONFIG_TEMPLATE"
+    fi
 fi
 
 # Verification
@@ -230,28 +281,70 @@ else
     echo "  ✗ requests library NOT available"
 fi
 
+# Install main service
+echo ""
+echo "============================================================"
+echo "Installing CrowdCount Main Service..."
+echo "============================================================"
+echo ""
+echo "This will install and enable the service to auto-start on boot."
+echo ""
+
+if [ -f "$SCRIPT_DIR/install_main_service.sh" ]; then
+    sudo "$SCRIPT_DIR/install_main_service.sh"
+else
+    echo "⚠ Warning: install_main_service.sh not found"
+    echo "   You'll need to manually install the service later."
+fi
+
 # Installation complete
 echo ""
 echo "============================================================"
-echo "✓ Setup Complete!"
+echo "✓✓✓ SETUP COMPLETE! ✓✓✓"
 echo "============================================================"
 echo ""
-echo "Next Steps:"
+echo "All services are now installed and configured to auto-start on boot:"
 echo ""
-echo "1. Install the main service:"
-echo "   sudo ./install_main_service.sh"
+echo "  ✓ Tailscale - VPN connectivity"
+echo "  ✓ Bluetooth - For WiFi provisioning"
+echo "  ✓ CrowdCount Main Service - Provisioning + Streaming"
 echo ""
-echo "2. (Optional) Create device identity file:"
-echo "   sudo nano /boot/firmware/device-identity.conf"
+echo "============================================================"
+echo "NEXT STEPS:"
+echo "============================================================"
 echo ""
-echo "3. Reboot to start the service:"
+echo "1. Configure your device settings:"
+echo "   nano $DEVICE_CONFIG"
+echo ""
+echo "   Required settings:"
+echo "   - DEVICE_ID=your_unique_device_id"
+echo "   - SERVER_IP=your_server_tailscale_ip"
+echo "   - PASSWORD=your_api_password"
+echo ""
+echo "2. Authenticate Tailscale (if not already done):"
+echo "   sudo tailscale up"
+echo ""
+echo "3. Reboot to start all services automatically:"
 echo "   sudo reboot"
 echo ""
-echo "4. After reboot, check service status:"
-echo "   sudo systemctl status crowdcount-main"
+echo "============================================================"
+echo "AFTER REBOOT:"
+echo "============================================================"
 echo ""
-echo "5. View logs:"
-echo "   sudo journalctl -u crowdcount-main -f"
+echo "The device will automatically:"
+echo "  • Connect to Tailscale VPN"
+echo "  • Check WiFi connectivity"
+echo "  • Start Bluetooth provisioning (if no WiFi)"
+echo "  • Start camera streaming (if WiFi connected)"
+echo "  • Report online/offline status to API"
+echo ""
+echo "Check status with:"
+echo "  sudo systemctl status crowdcount-main"
+echo ""
+echo "View live logs with:"
+echo "  sudo journalctl -u crowdcount-main -f"
 echo ""
 echo "See INSTALL.md for detailed documentation."
+echo ""
+echo "============================================================"
 echo ""

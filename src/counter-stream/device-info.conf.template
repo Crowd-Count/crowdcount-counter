@@ -15,6 +15,11 @@ WIDTH=640
 HEIGHT=480
 FPS=30
 
-# Optional: Authentication password (if MediaMTX requires it)
-# Leave empty if no authentication is needed
+# Optional: Authentication password for API status updates
+# This is used to mark the device as online/offline in the CrowdCount API
+# Leave empty if you don't want to use API status updates
 PASSWORD=
+
+# Optional: CrowdCount API URL for device status updates
+# Default: https://api.crowdcount.tech
+API_URL=https://api.crowdcount.tech
