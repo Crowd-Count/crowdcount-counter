@@ -14,10 +14,9 @@ _real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
 _user_home = os.path.expanduser(f'~{_real_user}') if _real_user else os.path.expanduser('~')
 
 IDENTITY_PATHS = [
-    f'{_user_home}/crowdcount-counter/boot/device-identity.conf',  # Project directory - CHECK THIS FIRST
-    '/boot/device-identity.conf',  # System boot partition
-    '/boot/firmware/device-identity.conf',  # Pi 5 uses this
-    f'{_user_home}/device-identity.conf',  # Development fallback
+    '/boot/firmware/device-identity.conf',  # Primary: Boot partition (Pi Zero 2W) - survives reflash
+    '/boot/device-identity.conf',           # Secondary: Legacy boot partition (older models, just in case)
+    f'{_user_home}/crowdcount-counter/boot/device-identity.conf',  # Fallback: Project directory (development)
 ]
 
 class DeviceIdentity:

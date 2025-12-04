@@ -9,6 +9,7 @@ import sys
 import time
 import subprocess
 import signal
+import configparser
 from pathlib import Path
 
 # Paths
@@ -23,6 +24,12 @@ PROVISIONED_FLAGS = [
 
 DEVICE_CONFIG = STREAM_DIR / "device-info.conf"
 
+# Device identity file locations
+IDENTITY_PATHS = [
+    Path('/boot/firmware/device-identity.conf'),
+    Path('/boot/device-identity.conf'),
+]
+
 
 class CrowdCountMain:
     """Main orchestrator for CrowdCount device"""
@@ -30,6 +37,79 @@ class CrowdCountMain:
     def __init__(self):
         self.running = True
         self.current_process = None
+        self.device_id = None
+        self.tailscale_auth_key = None
+        self._load_config()
+
+    def _load_config(self):
+        """Load device identity and configuration"""
+        # Load device identity (for DEVICE_ID)
+        for identity_path in IDENTITY_PATHS:
+            if identity_path.exists():
+                try:
+                    config = configparser.ConfigParser()
+                    config.read(identity_path)
+                    section = config['DEFAULT'] if 'DEFAULT' in config else config[config.sections()[0]]
+                    self.device_id = section.get('DEVICE_ID', None)
+                    if self.device_id:
+                        print(f"✓ Loaded device identity: {self.device_id} from {identity_path}")
+                        break
+                except Exception as e:
+                    print(f"⚠ Error reading {identity_path}: {e}")
+
+        # Load device config (for Tailscale auth key)
+        if DEVICE_CONFIG.exists():
+            try:
+                config = configparser.ConfigParser()
+                config.read(DEVICE_CONFIG)
+                # Try to read from file (it's not INI format, so read raw)
+                with open(DEVICE_CONFIG) as f:
+                    for line in f:
+                        if line.startswith('TAILSCALE_AUTH_KEY='):
+                            self.tailscale_auth_key = line.split('=', 1)[1].strip()
+                            if self.tailscale_auth_key:
+                                print(f"✓ Loaded Tailscale auth key")
+                            break
+            except Exception as e:
+                print(f"⚠ Error reading device config: {e}")
+
+    def authenticate_tailscale(self):
+        """Authenticate Tailscale with auth key and device hostname"""
+        if not self.tailscale_auth_key:
+            print("⚠ No Tailscale auth key configured, skipping authentication")
+            return False
+
+        try:
+            # Check if already authenticated
+            result = subprocess.run(
+                ['tailscale', 'status'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+
+            # If already authenticated and running, skip
+            if result.returncode == 0 and 'logged out' not in result.stdout.lower():
+                print("✓ Tailscale already authenticated")
+                return True
+
+            # Authenticate with hostname
+            hostname = self.device_id if self.device_id else "crowdcount-counter"
+            print(f"Authenticating Tailscale with hostname: {hostname}")
+
+            cmd = ['tailscale', 'up', f'--authkey={self.tailscale_auth_key}', f'--hostname={hostname}']
+            result = subprocess.run(cmd, capture_output=True, timeout=30, text=True)
+
+            if result.returncode == 0:
+                print(f"✓ Tailscale authenticated as {hostname}")
+                return True
+            else:
+                print(f"✗ Tailscale authentication failed: {result.stderr}")
+                return False
+
+        except Exception as e:
+            print(f"✗ Error authenticating Tailscale: {e}")
+            return False
 
     def check_wifi_connected(self):
         """Check if WiFi is currently connected using multiple methods"""
@@ -272,7 +352,14 @@ class CrowdCountMain:
         print("CROWDCOUNT DEVICE STARTUP")
         print("="*60)
         print(f"Working Directory: {SCRIPT_DIR}")
+        if self.device_id:
+            print(f"Device ID: {self.device_id}")
         print("="*60 + "\n")
+
+        # Authenticate Tailscale on startup (if not already authenticated)
+        print("Checking Tailscale authentication...")
+        self.authenticate_tailscale()
+        print()
 
         # Main decision loop
         while self.running:

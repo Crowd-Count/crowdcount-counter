@@ -1,119 +1,206 @@
 #!/bin/bash
 #
-# SD Card Customization Script for Manufacturing
-# This script customizes an SD card with unique device identity
-#
-# Usage: ./customize_sd_card.sh <device_number> <mount_point>
-# Example: ./customize_sd_card.sh 1 /media/boot
+# Customize SD Card with Device Identity
+# Writes device-identity.conf to boot partition for manufacturing
+# For Raspberry Pi Zero 2W
 #
 
 set -e
 
-# Check arguments
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <device_number> [mount_point]"
-    echo ""
-    echo "Example: $0 1 /media/boot"
-    echo "         $0 42"
-    echo ""
-    exit 1
-fi
-
-DEVICE_NUMBER=$1
-MOUNT_POINT=${2:-"/media/boot"}
-
-# Format device ID with leading zeros
-DEVICE_ID=$(printf "CC-%05d" $DEVICE_NUMBER)
-
-# Generate random secret (16 hex characters)
-DEVICE_SECRET=$(openssl rand -hex 8)
-
-# Get current date
-MANUFACTURING_DATE=$(date +%Y-%m-%d)
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
 echo "============================================================"
-echo "CrowdCount SD Card Customization"
-echo "============================================================"
-echo "Device Number: $DEVICE_NUMBER"
-echo "Device ID:     $DEVICE_ID"
-echo "Device Secret: $DEVICE_SECRET"
-echo "Mount Point:   $MOUNT_POINT"
-echo "Date:          $MANUFACTURING_DATE"
+echo "CrowdCount Device Identity Writer"
+echo "SD Card Customization for Manufacturing (Pi Zero 2W)"
 echo "============================================================"
 echo ""
 
-# Check if mount point exists
-if [ ! -d "$MOUNT_POINT" ]; then
-    echo "✗ Mount point does not exist: $MOUNT_POINT"
-    echo "  Please mount the SD card boot partition first."
+# Check arguments
+if [ $# -lt 5 ]; then
+    echo -e "${RED}✗ Error: Missing arguments${NC}"
+    echo ""
+    echo "Usage: $0 <device> <device_id> <device_secret> <device_password> <api_password>"
+    echo ""
+    echo "Examples:"
+    echo "  $0 /dev/sdb T0003 secret123 counter123 apipass123"
+    echo ""
+    echo "Arguments:"
+    echo "  device           - SD card device (e.g., /dev/sdb, /dev/mmcblk0)"
+    echo "  device_id        - Unique device ID/hostname (5 chars, e.g., T0003)"
+    echo "  device_secret    - Device secret for Bluetooth provisioning"
+    echo "  device_password  - Password for 'counter' user SSH access"
+    echo "  api_password     - Password for CrowdCount API status updates"
+    echo ""
+    echo "All fields are required to ensure proper device configuration."
+    echo ""
     exit 1
 fi
 
+DEVICE=$1
+DEVICE_ID=$2
+DEVICE_SECRET=$3
+DEVICE_PASSWORD=$4
+API_PASSWORD=$5
+MANUFACTURING_DATE=$(date +%Y-%m-%d)
+
+# Safety check
+if [ ! -b "$DEVICE" ]; then
+    echo -e "${RED}✗ Error: $DEVICE is not a block device${NC}"
+    echo ""
+    echo "Available devices:"
+    lsblk | grep disk
+    exit 1
+fi
+
+# Confirm with user
+echo -e "${YELLOW}⚠ WARNING: This will modify the boot partition on $DEVICE${NC}"
+echo ""
+echo "Device to customize: $DEVICE"
+echo "  Device ID (hostname):  $DEVICE_ID"
+echo "  Device Secret:         $DEVICE_SECRET"
+echo "  Device Password:       $DEVICE_PASSWORD"
+echo "  API Password:          $API_PASSWORD"
+echo "  Manufacturing Date:    $MANUFACTURING_DATE"
+echo ""
+echo "Is this correct? (yes/no)"
+read -r response
+
+if [[ ! "$response" =~ ^[Yy][Ee][Ss]$ ]]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# Determine partition name
+# For /dev/sdb -> /dev/sdb1
+# For /dev/mmcblk0 -> /dev/mmcblk0p1
+if [[ "$DEVICE" == *"mmcblk"* ]] || [[ "$DEVICE" == *"loop"* ]]; then
+    BOOT_PARTITION="${DEVICE}p1"
+else
+    BOOT_PARTITION="${DEVICE}1"
+fi
+
+echo ""
+echo "Step 1/5: Checking boot partition..."
+if [ ! -b "$BOOT_PARTITION" ]; then
+    echo -e "${RED}✗ Error: Boot partition not found: $BOOT_PARTITION${NC}"
+    echo ""
+    echo "Partitions on $DEVICE:"
+    lsblk "$DEVICE"
+    exit 1
+fi
+echo -e "${GREEN}✓${NC} Boot partition found: $BOOT_PARTITION"
+
+# Create mount point
+MOUNT_POINT="/tmp/crowdcount-boot-$$"
+mkdir -p "$MOUNT_POINT"
+
+echo ""
+echo "Step 2/5: Mounting boot partition..."
+if ! sudo mount "$BOOT_PARTITION" "$MOUNT_POINT"; then
+    echo -e "${RED}✗ Error: Failed to mount boot partition${NC}"
+    rmdir "$MOUNT_POINT"
+    exit 1
+fi
+echo -e "${GREEN}✓${NC} Mounted to: $MOUNT_POINT"
+
+# Cleanup function
+cleanup() {
+    echo ""
+    echo "Step 5/5: Cleaning up..."
+    sudo umount "$MOUNT_POINT" 2>/dev/null || true
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
+    echo -e "${GREEN}✓${NC} Unmounted and cleaned up"
+}
+trap cleanup EXIT
+
+# Check if it's actually a boot partition
+if [ ! -f "$MOUNT_POINT/config.txt" ] && [ ! -f "$MOUNT_POINT/cmdline.txt" ]; then
+    echo -e "${RED}✗ Error: This doesn't look like a Raspberry Pi boot partition${NC}"
+    echo "  Expected to find config.txt or cmdline.txt"
+    exit 1
+fi
+
+echo ""
+echo "Step 3/5: Creating device-identity.conf..."
+
 # Write device identity file
 IDENTITY_FILE="$MOUNT_POINT/device-identity.conf"
-
-echo "Writing device identity to $IDENTITY_FILE..."
-
-cat > "$IDENTITY_FILE" <<EOF
+sudo tee "$IDENTITY_FILE" > /dev/null <<EOF
 # CrowdCount Device Identity
-# Factory programmed on $MANUFACTURING_DATE
-# DO NOT MODIFY
+# This file is written during manufacturing to /boot/firmware/device-identity.conf
+#
+# DO NOT MODIFY THIS FILE - it contains factory-programmed device identity
+# This file survives OS reflashes and contains all device-specific configuration
 
 [DEFAULT]
+# Unique device identifier (hostname - 5 characters)
+# Used as: hostname, stream name, Bluetooth name
 DEVICE_ID=$DEVICE_ID
+
+# Device secret for Bluetooth provisioning pairing
 DEVICE_SECRET=$DEVICE_SECRET
+
+# Device password for 'counter' user SSH access
+DEVICE_PASSWORD=$DEVICE_PASSWORD
+
+# API password for status updates to CrowdCount API
+API_PASSWORD=$API_PASSWORD
+
+# Manufacturing information (auto-generated)
 MANUFACTURING_DATE=$MANUFACTURING_DATE
 MODEL=counter-v2
 HARDWARE_VERSION=1.0
 FIRMWARE_VERSION=1.0
-SERIAL_NUMBER=SN$(date +%Y%m%d)$(printf "%05d" $DEVICE_NUMBER)
+SERIAL_NUMBER=SN${MANUFACTURING_DATE//-/}${DEVICE_ID}
 EOF
 
-echo "✓ Device identity written"
-
-# Generate QR code
-QR_DIR="qr_codes"
-mkdir -p "$QR_DIR"
-QR_FILE="$QR_DIR/qr_${DEVICE_ID}.png"
-
-# QR code contains: crowdcount://provision?id=CC-00001&secret=a1b2c3d4e5f6
-QR_DATA="crowdcount://provision?id=${DEVICE_ID}&secret=${DEVICE_SECRET}"
+echo -e "${GREEN}✓${NC} Created: $IDENTITY_FILE"
 
 echo ""
-echo "Generating QR code..."
-
-if command -v qrencode &> /dev/null; then
-    qrencode -s 6 -o "$QR_FILE" "$QR_DATA"
-    echo "✓ QR code generated: $QR_FILE"
+echo "Step 4/5: Verifying file..."
+if [ -f "$IDENTITY_FILE" ]; then
+    echo -e "${GREEN}✓${NC} File exists and is readable"
+    echo ""
+    echo "Contents:"
+    echo "─────────────────────────────────────────────────────────"
+    cat "$IDENTITY_FILE"
+    echo "─────────────────────────────────────────────────────────"
 else
-    echo "⚠ qrencode not found - skipping QR code generation"
-    echo "  Install with: sudo apt install qrencode"
-    echo "  QR data: $QR_DATA"
+    echo -e "${RED}✗ Error: File was not created${NC}"
+    exit 1
 fi
 
-# Log to manufacturing database
-LOG_FILE="manufacturing_log.csv"
-
-if [ ! -f "$LOG_FILE" ]; then
-    echo "device_id,device_secret,manufacturing_date,serial_number,qr_file" > "$LOG_FILE"
-fi
-
-echo "$DEVICE_ID,$DEVICE_SECRET,$MANUFACTURING_DATE,SN$(date +%Y%m%d)$(printf '%05d' $DEVICE_NUMBER),$QR_FILE" >> "$LOG_FILE"
-
-echo "✓ Logged to $LOG_FILE"
+# Sync to ensure write
+sync
 
 echo ""
 echo "============================================================"
-echo "✓ SD Card Customization Complete!"
+echo -e "${GREEN}✓ SUCCESS!${NC}"
 echo "============================================================"
 echo ""
-echo "Next Steps:"
-echo "  1. Unmount the SD card: umount $MOUNT_POINT"
-echo "  2. Print QR code label: $QR_FILE"
-echo "  3. Apply QR code sticker to device"
-echo "  4. Insert SD card into Raspberry Pi"
-echo "  5. Ship device"
+echo "Device identity written to boot partition:"
+echo "  Device ID (hostname):  $DEVICE_ID"
+echo "  Device Secret:         $DEVICE_SECRET"
+echo "  Device Password:       $DEVICE_PASSWORD"
+echo "  API Password:          $API_PASSWORD"
+echo "  Location: $IDENTITY_FILE"
 echo ""
-echo "QR Code Data (for printing):"
-echo "  $QR_DATA"
+echo "Next steps:"
+echo "  1. Safely eject SD card"
+echo "  2. Insert into Raspberry Pi Zero 2W"
+echo "  3. First boot - device will auto-configure with hostname $DEVICE_ID"
+echo "  4. Set device password: echo 'counter:$DEVICE_PASSWORD' | sudo chpasswd"
+echo "  5. Reboot - device will stream with ID $DEVICE_ID"
+echo ""
+echo "SSH access:"
+echo "  Username: counter"
+echo "  Password: $DEVICE_PASSWORD"
+echo ""
+echo "Verify after boot:"
+echo "  sudo journalctl -u crowdcount-main -f | grep 'Device identity'"
+echo "  Should show: Device identity: $DEVICE_ID"
 echo ""

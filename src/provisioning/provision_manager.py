@@ -18,8 +18,9 @@ from network_setup import NetworkSetup
 class ProvisioningManager:
     """Manages the complete provisioning process"""
 
-    PROVISIONED_FLAG = '/boot/provisioned'
-    PROVISIONED_FLAG_ALT = '/boot/firmware/provisioned'
+    # Provisioned flags (priority: boot partition first)
+    PROVISIONED_FLAG = '/boot/firmware/provisioned'  # Primary (Pi 5, newer models)
+    PROVISIONED_FLAG_ALT = '/boot/provisioned'       # Legacy (older Pi models)
 
     def __init__(self):
         self.device_identity = DeviceIdentity()
