@@ -155,8 +155,22 @@ class ProvisioningManager:
             print("✓ WiFi already connected")
             print("  Skipping Bluetooth provisioning")
             print()
-            print("If you need to re-provision, disconnect WiFi first.")
-            return False
+
+            # Check if device config exists
+            device_config = Path("/home/counter/crowdcount-counter/src/counter-stream/device-info.conf")
+            if device_config.exists():
+                print("✓ Device configuration exists")
+                print("  Marking device as provisioned...")
+                self.mark_provisioned()
+                print()
+                print("Device is ready to stream!")
+                return True
+            else:
+                print("⚠ Device configuration missing!")
+                print(f"  Please create: {device_config}")
+                print()
+                print("If you need to re-provision, disconnect WiFi first.")
+                return False
 
         # Start Bluetooth server
         print("Starting Bluetooth provisioning server...")
