@@ -7,6 +7,7 @@ Handles WiFi and Tailscale configuration
 import subprocess
 import time
 import os
+import re
 import requests
 from pathlib import Path
 
@@ -18,6 +19,91 @@ class NetworkSetup:
         self.device_id = device_id
         self.wifi_connected = False
         self.tailscale_connected = False
+
+    def _sanitize_ssid(self, ssid: str) -> bool:
+        """Validate SSID to prevent command injection.
+
+        Returns:
+            True if SSID is safe, False otherwise
+        """
+        if not ssid or not isinstance(ssid, str):
+            return False
+
+        # Check length (WiFi SSIDs are max 32 bytes)
+        if len(ssid) > 32 or len(ssid) == 0:
+            return False
+
+        # Disallow dangerous shell metacharacters
+        dangerous_chars = ['$', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '\n', '\r', '\\', '"', "'"]
+        if any(char in ssid for char in dangerous_chars):
+            return False
+
+        return True
+
+    def _sanitize_password(self, password: str) -> bool:
+        """Validate WiFi password to prevent command injection.
+
+        Returns:
+            True if password is safe, False otherwise
+        """
+        if not password or not isinstance(password, str):
+            return False
+
+        # Check length (reasonable limits)
+        if len(password) > 256 or len(password) == 0:
+            return False
+
+        # Disallow dangerous shell metacharacters
+        dangerous_chars = ['$', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '\n', '\r', '\\']
+        if any(char in password for char in dangerous_chars):
+            return False
+
+        return True
+
+    def _validate_tailscale_key(self, auth_key: str) -> bool:
+        """Validate Tailscale auth key format.
+
+        Returns:
+            True if key appears valid, False otherwise
+        """
+        if not auth_key or not isinstance(auth_key, str):
+            return False
+
+        # Tailscale auth keys start with 'tskey-auth-' or 'tskey-'
+        if not (auth_key.startswith('tskey-auth-') or auth_key.startswith('tskey-')):
+            print(f"Warning: Auth key doesn't match expected Tailscale format")
+            return False
+
+        # Check reasonable length (Tailscale keys are typically 40-60+ chars)
+        if len(auth_key) < 20 or len(auth_key) > 200:
+            print(f"Warning: Auth key length ({len(auth_key)}) seems unusual")
+            return False
+
+        return True
+
+    def _validate_ip_address(self, ip: str) -> bool:
+        """Validate IP address format.
+
+        Returns:
+            True if IP is valid, False otherwise
+        """
+        if not ip or not isinstance(ip, str):
+            return False
+
+        # Basic IPv4 validation
+        parts = ip.split('.')
+        if len(parts) != 4:
+            return False
+
+        try:
+            for part in parts:
+                num = int(part)
+                if num < 0 or num > 255:
+                    return False
+        except ValueError:
+            return False
+
+        return True
 
     def configure_wifi(self, ssid, password):
         """
@@ -31,6 +117,15 @@ class NetworkSetup:
             bool: True if connection successful
         """
         print(f"📡 Configuring WiFi: {ssid}")
+
+        # SECURITY: Validate inputs to prevent command injection
+        if not self._sanitize_ssid(ssid):
+            print(f"✗ Invalid SSID format or contains dangerous characters")
+            return False
+
+        if not self._sanitize_password(password):
+            print(f"✗ Invalid password format or contains dangerous characters")
+            return False
 
         try:
             # Turn WiFi off and on to ensure clean state
@@ -83,6 +178,11 @@ class NetworkSetup:
             hostname = self.device_id.lower().replace('_', '-')
 
         print(f"🔐 Joining Tailscale network as {hostname}")
+
+        # Validate auth key format
+        if not self._validate_tailscale_key(auth_key):
+            print("✗ Invalid Tailscale auth key format")
+            return False
 
         try:
             # Check if Tailscale is installed
@@ -139,7 +239,7 @@ class NetworkSetup:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except:
+        except Exception:
             pass
         return None
 
@@ -164,9 +264,17 @@ class NetworkSetup:
         Args:
             server_ip: MediaMTX server IP (Tailscale IP)
             stream_name: Optional stream name (defaults to device_id)
+
+        Returns:
+            Path to config file or None on error
         """
         if not stream_name:
             stream_name = self.device_id
+
+        # Validate server IP
+        if not self._validate_ip_address(server_ip):
+            print(f"✗ Invalid server IP address: {server_ip}")
+            return None
 
         # Find the counter-stream directory
         script_dir = Path(__file__).parent.parent / 'counter-stream'

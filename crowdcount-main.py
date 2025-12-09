@@ -10,7 +10,15 @@ import time
 import subprocess
 import signal
 import configparser
+import logging
 from pathlib import Path
+
+# Add src directory to path for logging module
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
+from logging_config import setup_logging
+
+# Setup logging
+logger = setup_logging('crowdcount-main')
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent
@@ -136,7 +144,7 @@ class CrowdCountMain:
                             if line.startswith('yes:'):
                                 ssid = line.split(':', 1)[1]
                                 return True, ssid if ssid else "unknown"
-                    except:
+                    except Exception:
                         pass
                     return True, "unknown"
         except FileNotFoundError:
@@ -161,7 +169,7 @@ class CrowdCountMain:
                         text=True
                     ).stdout.strip()
                     return True, ssid if ssid else "unknown"
-                except:
+                except Exception:
                     return True, "unknown"
         except FileNotFoundError:
             pass  # iwgetid not available, try next method
@@ -220,7 +228,7 @@ class CrowdCountMain:
                 for line in result.stdout.split('\n'):
                     if line.startswith('ssid='):
                         return line.split('=', 1)[1]
-        except:
+        except Exception:
             pass
         return None
 
@@ -336,7 +344,7 @@ class CrowdCountMain:
                 try:
                     self.current_process.terminate()
                     self.current_process.wait(timeout=5)
-                except:
+                except Exception:
                     self.current_process.kill()
 
             sys.exit(0)

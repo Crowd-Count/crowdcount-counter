@@ -61,6 +61,8 @@ class RTSPCameraStreamer:
         self.health_check_interval = 30  # seconds
         self.last_status_update = 0
         self.status_update_interval = 60  # seconds
+        self.consecutive_health_failures = 0
+        self.max_health_failures = 5  # Only break after 5 consecutive failures (2.5 min)
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -104,7 +106,7 @@ class RTSPCameraStreamer:
                 if self.picam2:
                     try:
                         self.picam2.close()
-                    except:
+                    except Exception:
                         pass
                     self.picam2 = None
 
@@ -249,11 +251,16 @@ class RTSPCameraStreamer:
 
                     current_time = time.time()
 
-                    # Periodic health check
+                    # Periodic health check (informational only - never breaks stream)
+                    # Stream only breaks on actual FFmpeg/camera failures
                     if current_time - self.last_health_check >= self.health_check_interval:
                         if not self.check_server_health():
-                            print("✗ Server health check failed - connection may be lost")
-                            break
+                            self.consecutive_health_failures += 1
+                            print(f"⚠ Health check failed ({self.consecutive_health_failures} consecutive)")
+                        else:
+                            if self.consecutive_health_failures > 0:
+                                print(f"✓ Health check recovered after {self.consecutive_health_failures} failures")
+                            self.consecutive_health_failures = 0
                         self.last_health_check = current_time
 
                     # Periodic status update
@@ -511,19 +518,19 @@ class RTSPCameraStreamer:
                 # Stop encoder if it's running
                 try:
                     self.picam2.stop_encoder()
-                except:
+                except Exception:
                     pass
                 self.picam2.stop()
                 self.picam2.close()
                 print("✓ Closed picamera2")
-            except:
+            except Exception:
                 pass
 
         if self.cap:
             try:
                 self.cap.release()
                 print("✓ Closed legacy camera")
-            except:
+            except Exception:
                 pass
 
         # Close ffmpeg
@@ -532,7 +539,7 @@ class RTSPCameraStreamer:
                 self.ffmpeg_process.stdin.close()
                 self.ffmpeg_process.wait(timeout=5)
                 print("✓ Closed ffmpeg process")
-            except:
+            except Exception:
                 self.ffmpeg_process.kill()
                 print("✓ Killed ffmpeg process")
 

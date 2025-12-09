@@ -67,7 +67,7 @@ class ProvisioningManager:
             import subprocess
             result = subprocess.run(['iwgetid'], capture_output=True, timeout=5)
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def on_provisioning_complete(self, data):

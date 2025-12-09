@@ -43,19 +43,36 @@ class DeviceIdentity:
 
     def _read_identity_file(self, path):
         """Read identity from config file"""
-        config = configparser.ConfigParser()
-        config.read(path)
+        try:
+            config = configparser.ConfigParser()
+            config.read(path)
 
-        # Support both [DEFAULT] section and no section
-        if 'DEFAULT' in config:
-            section = config['DEFAULT']
-        else:
-            section = config[config.sections()[0]] if config.sections() else {}
+            # Support both [DEFAULT] section and no section
+            if 'DEFAULT' in config:
+                section = config['DEFAULT']
+            elif config.sections():
+                section = config[config.sections()[0]]
+            else:
+                print(f"Warning: Config file {path} has no sections")
+                section = {}
 
-        self.device_id = section.get('DEVICE_ID', 'CC-UNKNOWN')
-        self.device_secret = section.get('DEVICE_SECRET', '')
-        self.manufacturing_date = section.get('MANUFACTURING_DATE', 'unknown')
-        self.model = section.get('MODEL', 'counter-v2')
+            self.device_id = section.get('DEVICE_ID', 'CC-UNKNOWN')
+            self.device_secret = section.get('DEVICE_SECRET', '')
+            self.manufacturing_date = section.get('MANUFACTURING_DATE', 'unknown')
+            self.model = section.get('MODEL', 'counter-v2')
+
+            # Validate device_id format (should be alphanumeric with dashes)
+            if not self.device_id or len(self.device_id) > 32:
+                print(f"Warning: Invalid DEVICE_ID length in {path}")
+
+        except configparser.Error as e:
+            print(f"Error parsing identity file {path}: {e}")
+            self.device_id = 'CC-UNKNOWN'
+            self.device_secret = ''
+        except Exception as e:
+            print(f"Unexpected error reading identity file {path}: {e}")
+            self.device_id = 'CC-UNKNOWN'
+            self.device_secret = ''
 
     def get_bluetooth_name(self):
         """Get the Bluetooth advertised name"""
