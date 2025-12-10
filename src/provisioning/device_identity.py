@@ -5,6 +5,7 @@ Reads device ID and secret from boot partition for QR code provisioning
 """
 
 import os
+import hmac
 import configparser
 from pathlib import Path
 
@@ -79,8 +80,11 @@ class DeviceIdentity:
         return f"CrowdCount: {self.device_id}"
 
     def validate_secret(self, provided_secret):
-        """Validate the provided secret matches device secret"""
-        return self.device_secret == provided_secret
+        """Validate the provided secret matches device secret (timing-safe comparison)"""
+        if not self.device_secret or not provided_secret:
+            return False
+        # Use constant-time comparison to prevent timing attacks
+        return hmac.compare_digest(self.device_secret, provided_secret)
 
     def __str__(self):
         return f"Device {self.device_id} (manufactured {self.manufacturing_date})"

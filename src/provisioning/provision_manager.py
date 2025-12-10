@@ -35,7 +35,7 @@ class ProvisioningManager:
     def mark_provisioned(self):
         """Mark device as provisioned"""
         # Try to write to /boot/firmware first (Pi 5), fall back to /boot
-        for flag_path in [self.PROVISIONED_FLAG_ALT, self.PROVISIONED_FLAG]:
+        for flag_path in [self.PROVISIONED_FLAG, self.PROVISIONED_FLAG_ALT]:
             try:
                 flag_dir = os.path.dirname(flag_path)
                 if os.path.exists(flag_dir):
@@ -101,7 +101,11 @@ class ProvisioningManager:
         # Step 3: Write device configuration
         print("\nStep 3/4: Writing device configuration...")
         try:
-            self.network_setup.write_device_config(data.server_ip, stream_name)
+            self.network_setup.write_device_config(
+                data.server_ip,
+                stream_name,
+                tailscale_auth_key=data.tailscale_auth_key
+            )
         except Exception as e:
             print(f"✗ Failed to write config: {e}")
             self.bluetooth_server.stop()
@@ -142,14 +146,14 @@ class ProvisioningManager:
 
         # Check if already provisioned
         if self.is_provisioned():
-            print("⚠ Device already provisioned!")
+            print("✓ Device already provisioned!")
             print()
             print("To re-provision:")
-            print("  1. Run: sudo rm /boot/provisioned")
+            print("  1. Run: sudo rm /boot/firmware/provisioned")
             print("  2. Reboot the device")
             print()
-            print("Or use the reset button on the device.")
-            return False
+            # Return True since device is ready (already provisioned)
+            return True
 
         # Check WiFi status
         if self.is_wifi_connected():
@@ -157,8 +161,8 @@ class ProvisioningManager:
             print("  Skipping Bluetooth provisioning")
             print()
 
-            # Check if device config exists
-            device_config = Path("/home/counter/crowdcount-counter/src/counter-stream/device-info.conf")
+            # Check if device config exists (relative to this script's location)
+            device_config = Path(__file__).parent.parent / "counter-stream" / "device-info.conf"
             if device_config.exists():
                 print("✓ Device configuration exists")
                 print("  Marking device as provisioned...")

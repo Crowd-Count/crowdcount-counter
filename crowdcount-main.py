@@ -13,8 +13,9 @@ import configparser
 import logging
 from pathlib import Path
 
-# Add src directory to path for logging module
+# Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent / 'src' / 'provisioning'))
 from logging_config import setup_logging
 
 # Setup logging
@@ -240,6 +241,96 @@ class CrowdCountMain:
         """Check if device configuration exists"""
         return DEVICE_CONFIG.exists()
 
+    def try_saved_wifi(self, max_attempts=3, retry_delay=5):
+        """Try to connect to saved WiFi credentials before provisioning
+
+        Args:
+            max_attempts: Number of connection attempts
+            retry_delay: Seconds between attempts
+
+        Returns:
+            bool: True if connected successfully
+        """
+        # Check for saved WiFi credentials
+        credential_locations = [
+            Path('/boot/firmware/wifi-credentials.conf'),
+            Path('/boot/wifi-credentials.conf'),
+            Path.home() / '.config' / 'crowdcount' / 'wifi-credentials.conf',
+        ]
+
+        ssid = None
+        password = None
+
+        for config_file in credential_locations:
+            if config_file.exists():
+                try:
+                    with open(config_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('WIFI_SSID='):
+                                ssid = line.split('=', 1)[1]
+                            elif line.startswith('WIFI_PASSWORD='):
+                                password = line.split('=', 1)[1]
+
+                    if ssid and password:
+                        print(f"✓ Found saved WiFi credentials for: {ssid}")
+                        break
+                except Exception as e:
+                    print(f"⚠ Error reading {config_file}: {e}")
+                    continue
+
+        if not ssid or not password:
+            print("No saved WiFi credentials found")
+            return False
+
+        print(f"📡 Attempting to connect to saved WiFi: {ssid}")
+
+        for attempt in range(1, max_attempts + 1):
+            print(f"  Attempt {attempt}/{max_attempts}...")
+
+            try:
+                # First check if already connected
+                wifi_connected, current_ssid = self.check_wifi_connected()
+                if wifi_connected:
+                    print(f"✓ Already connected to WiFi: {current_ssid}")
+                    return True
+
+                # Turn on WiFi radio if off
+                subprocess.run(
+                    ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
+                    capture_output=True,
+                    timeout=10
+                )
+                time.sleep(2)
+
+                # Try to connect
+                result = subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
+                     'password', password],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                if result.returncode == 0:
+                    print(f"✓ Connected to saved WiFi: {ssid}")
+                    return True
+                else:
+                    error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                    print(f"  Connection failed: {error_msg}")
+
+            except subprocess.TimeoutExpired:
+                print(f"  Connection attempt timed out")
+            except Exception as e:
+                print(f"  Error: {e}")
+
+            if attempt < max_attempts:
+                print(f"  Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+
+        print(f"✗ Failed to connect to saved WiFi after {max_attempts} attempts")
+        return False
+
     def check_tailscale_connected(self):
         """Check if Tailscale is running and connected"""
         try:
@@ -266,12 +357,13 @@ class CrowdCountMain:
             return False, None
 
     def run_provisioning(self):
-        """Run the provisioning process"""
+        """Run the provisioning process (waits indefinitely for connection)"""
         print("\n" + "="*60)
         print("STARTING PROVISIONING MODE")
         print("="*60)
         print("Device is not connected to WiFi")
         print("Starting Bluetooth provisioning...")
+        print("Waiting for user to provision via mobile app...")
         print("="*60 + "\n")
 
         provision_script = PROVISIONING_DIR / "provision_manager.py"
@@ -386,8 +478,22 @@ class CrowdCountMain:
 
             # Decision logic
             if not wifi_connected:
-                # No WiFi → provision
-                print("Decision: Device needs provisioning (no WiFi)")
+                # No WiFi → try saved credentials first, then provision
+                print("Decision: WiFi not connected")
+                print()
+
+                # First, try to connect using saved WiFi credentials
+                print("Trying saved WiFi credentials...")
+                if self.try_saved_wifi(max_attempts=3, retry_delay=5):
+                    # Successfully connected to saved WiFi
+                    print("\n✓ Connected using saved WiFi credentials")
+                    print("Rechecking status...")
+                    time.sleep(2)
+                    continue
+
+                # Saved WiFi failed or no credentials - start provisioning
+                print("\nSaved WiFi connection failed or no credentials found")
+                print("Starting Bluetooth provisioning...")
                 success = self.run_provisioning()
 
                 if success:

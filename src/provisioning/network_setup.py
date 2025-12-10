@@ -244,26 +244,155 @@ class NetworkSetup:
         return None
 
     def _save_wifi_config(self, ssid, password):
-        """Save WiFi configuration for future reference"""
-        config_dir = Path.home() / '.config' / 'crowdcount'
-        config_dir.mkdir(parents=True, exist_ok=True)
+        """Save WiFi configuration for future reconnection on boot"""
+        # Save to boot partition (survives reflash) - primary location
+        boot_locations = [
+            Path('/boot/firmware/wifi-credentials.conf'),
+            Path('/boot/wifi-credentials.conf'),
+        ]
 
-        config_file = config_dir / 'wifi.conf'
-        with open(config_file, 'w') as f:
-            f.write(f"SSID={ssid}\n")
-            f.write(f"# Password stored in NetworkManager\n")
+        saved = False
+        for config_file in boot_locations:
+            try:
+                config_dir = config_file.parent
+                if config_dir.exists():
+                    with open(config_file, 'w') as f:
+                        f.write(f"# CrowdCount WiFi Credentials\n")
+                        f.write(f"# Auto-saved on {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write(f"WIFI_SSID={ssid}\n")
+                        f.write(f"WIFI_PASSWORD={password}\n")
+                    # Restrict permissions (root only)
+                    os.chmod(config_file, 0o600)
+                    print(f"  ✓ WiFi credentials saved to {config_file}")
+                    saved = True
+                    break
+            except Exception as e:
+                print(f"  ⚠ Could not save to {config_file}: {e}")
+                continue
 
-        # Restrict permissions
-        os.chmod(config_file, 0o600)
-        print(f"  WiFi config saved to {config_file}")
+        if not saved:
+            # Fallback to user config directory
+            config_dir = Path.home() / '.config' / 'crowdcount'
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_file = config_dir / 'wifi-credentials.conf'
+            try:
+                with open(config_file, 'w') as f:
+                    f.write(f"# CrowdCount WiFi Credentials\n")
+                    f.write(f"WIFI_SSID={ssid}\n")
+                    f.write(f"WIFI_PASSWORD={password}\n")
+                os.chmod(config_file, 0o600)
+                print(f"  ✓ WiFi credentials saved to {config_file}")
+            except Exception as e:
+                print(f"  ⚠ Could not save WiFi credentials: {e}")
 
-    def write_device_config(self, server_ip, stream_name=None):
+    @staticmethod
+    def get_saved_wifi_credentials():
+        """Load saved WiFi credentials from persistent storage
+
+        Returns:
+            tuple: (ssid, password) or (None, None) if not found
+        """
+        # Check locations in priority order
+        credential_locations = [
+            Path('/boot/firmware/wifi-credentials.conf'),
+            Path('/boot/wifi-credentials.conf'),
+            Path.home() / '.config' / 'crowdcount' / 'wifi-credentials.conf',
+        ]
+
+        for config_file in credential_locations:
+            if config_file.exists():
+                try:
+                    ssid = None
+                    password = None
+                    with open(config_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('WIFI_SSID='):
+                                ssid = line.split('=', 1)[1]
+                            elif line.startswith('WIFI_PASSWORD='):
+                                password = line.split('=', 1)[1]
+
+                    if ssid and password:
+                        print(f"✓ Found saved WiFi credentials for: {ssid}")
+                        return ssid, password
+                except Exception as e:
+                    print(f"⚠ Error reading {config_file}: {e}")
+                    continue
+
+        return None, None
+
+    def try_saved_wifi(self, max_attempts=3, retry_delay=5):
+        """Try to connect to saved WiFi credentials
+
+        Args:
+            max_attempts: Number of connection attempts
+            retry_delay: Seconds between attempts
+
+        Returns:
+            bool: True if connected successfully
+        """
+        ssid, password = self.get_saved_wifi_credentials()
+
+        if not ssid or not password:
+            print("No saved WiFi credentials found")
+            return False
+
+        print(f"📡 Attempting to connect to saved WiFi: {ssid}")
+
+        for attempt in range(1, max_attempts + 1):
+            print(f"  Attempt {attempt}/{max_attempts}...")
+
+            try:
+                # First check if already connected to this network
+                result = subprocess.run(
+                    ['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.startswith('yes:') and ssid in line:
+                            print(f"✓ Already connected to {ssid}")
+                            self.wifi_connected = True
+                            return True
+
+                # Try to connect
+                result = subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
+                     'password', password],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                if result.returncode == 0:
+                    print(f"✓ Connected to saved WiFi: {ssid}")
+                    self.wifi_connected = True
+                    return True
+                else:
+                    print(f"  Connection failed: {result.stderr.strip()}")
+
+            except subprocess.TimeoutExpired:
+                print(f"  Connection attempt timed out")
+            except Exception as e:
+                print(f"  Error: {e}")
+
+            if attempt < max_attempts:
+                print(f"  Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+
+        print(f"✗ Failed to connect to saved WiFi after {max_attempts} attempts")
+        return False
+
+    def write_device_config(self, server_ip, stream_name=None, tailscale_auth_key=None):
         """
         Write device-info.conf for streaming service
 
         Args:
             server_ip: MediaMTX server IP (Tailscale IP)
             stream_name: Optional stream name (defaults to device_id)
+            tailscale_auth_key: Optional Tailscale auth key for re-authentication
 
         Returns:
             Path to config file or None on error
@@ -299,9 +428,11 @@ WIDTH=640
 HEIGHT=480
 FPS=30
 
-# Optional: Authentication password (if MediaMTX requires it)
-# Leave empty if no authentication is needed
-PASSWORD=
+# CrowdCount API URL
+API_URL=https://api.crowdcount.tech
+
+# Tailscale auth key (for re-authentication if needed)
+TAILSCALE_AUTH_KEY={tailscale_auth_key or ''}
 """
 
         with open(config_file, 'w') as f:

@@ -63,6 +63,8 @@ class RTSPCameraStreamer:
         self.status_update_interval = 60  # seconds
         self.consecutive_health_failures = 0
         self.max_health_failures = 5  # Only break after 5 consecutive failures (2.5 min)
+        self.ip_refresh_interval = 30  # seconds between IP refresh attempts on failure
+        self.last_ip_refresh = 0
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -369,6 +371,55 @@ class RTSPCameraStreamer:
             print(f"⚠ Failed to update status: {e}")
             return False
 
+    def fetch_streaming_server_ip(self):
+        """Fetch the streaming server IP from the CrowdCount API
+
+        Calls api.crowdcount.tech/get_streaming_server_ip with device credentials.
+        Returns the new server IP if successful, None otherwise.
+        """
+        if not self.password:
+            print("⚠ Cannot fetch server IP: no credentials configured")
+            return None
+
+        try:
+            import requests
+
+            api_endpoint = f"{self.api_url}/get_streaming_server_ip"
+            params = {
+                'user_id': self.device_id,
+                'password': self.password
+            }
+
+            print(f"Fetching streaming server IP from API...")
+            response = requests.get(api_endpoint, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                new_ip = data.get('server_ip') or data.get('ip') or data.get('streaming_ip')
+                if new_ip:
+                    print(f"✓ Got streaming server IP from API: {new_ip}")
+                    return new_ip
+                else:
+                    print(f"⚠ API response missing server IP: {data}")
+                    return None
+            else:
+                print(f"⚠ Failed to fetch server IP: HTTP {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"⚠ Error fetching server IP: {e}")
+            return None
+
+    def update_server_ip(self, new_ip):
+        """Update the server IP and related URLs"""
+        if new_ip and new_ip != self.server_ip:
+            print(f"Updating server IP: {self.server_ip} → {new_ip}")
+            self.server_ip = new_ip
+            self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            self.orchestrator_url = f"http://{new_ip}:5000"
+            return True
+        return False
+
     def register_device(self):
         """Register device information with the server"""
         try:
@@ -451,6 +502,14 @@ class RTSPCameraStreamer:
                     print("✗ Failed to initialize ffmpeg")
                     self.cleanup()
                     if self.reconnection_enabled and not self.shutdown_requested:
+                        # FFmpeg failure might be due to server IP change - fetch new IP
+                        current_time = time.time()
+                        if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                            new_ip = self.fetch_streaming_server_ip()
+                            if new_ip:
+                                self.update_server_ip(new_ip)
+                            self.last_ip_refresh = current_time
+
                         print(f"Retrying in {self.reconnection_delay} seconds...")
                         for _ in range(self.reconnection_delay):
                             if self.shutdown_requested:
@@ -475,6 +534,15 @@ class RTSPCameraStreamer:
                 self.cleanup()
                 if self.reconnection_enabled:
                     print(f"\n⚠ Connection lost. Reconnecting in {self.reconnection_delay} seconds...")
+
+                    # Try to fetch new server IP from API before reconnecting
+                    current_time = time.time()
+                    if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                        new_ip = self.fetch_streaming_server_ip()
+                        if new_ip:
+                            self.update_server_ip(new_ip)
+                        self.last_ip_refresh = current_time
+
                     for _ in range(self.reconnection_delay):
                         if self.shutdown_requested:
                             break
@@ -487,6 +555,15 @@ class RTSPCameraStreamer:
                 self.cleanup()
                 if self.reconnection_enabled and not self.shutdown_requested:
                     print(f"Retrying in {self.reconnection_delay} seconds...")
+
+                    # Try to fetch new server IP from API before reconnecting
+                    current_time = time.time()
+                    if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                        new_ip = self.fetch_streaming_server_ip()
+                        if new_ip:
+                            self.update_server_ip(new_ip)
+                        self.last_ip_refresh = current_time
+
                     for _ in range(self.reconnection_delay):
                         if self.shutdown_requested:
                             break
@@ -525,6 +602,7 @@ class RTSPCameraStreamer:
                 print("✓ Closed picamera2")
             except Exception:
                 pass
+            self.picam2 = None
 
         if self.cap:
             try:
@@ -532,6 +610,7 @@ class RTSPCameraStreamer:
                 print("✓ Closed legacy camera")
             except Exception:
                 pass
+            self.cap = None
 
         # Close ffmpeg
         if self.ffmpeg_process:
@@ -540,8 +619,12 @@ class RTSPCameraStreamer:
                 self.ffmpeg_process.wait(timeout=5)
                 print("✓ Closed ffmpeg process")
             except Exception:
-                self.ffmpeg_process.kill()
-                print("✓ Killed ffmpeg process")
+                try:
+                    self.ffmpeg_process.kill()
+                    print("✓ Killed ffmpeg process")
+                except Exception:
+                    pass
+            self.ffmpeg_process = None
 
         print("✓ Cleanup completed\n")
 

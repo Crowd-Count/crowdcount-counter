@@ -179,7 +179,7 @@ class AuthCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        secret = ''.join([chr(byte) for byte in value])
+        secret = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_auth_secret(secret)
 
 
@@ -192,7 +192,7 @@ class WifiSSIDCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        ssid = ''.join([chr(byte) for byte in value])
+        ssid = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_wifi_ssid(ssid)
 
 
@@ -205,7 +205,7 @@ class WifiPasswordCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        password = ''.join([chr(byte) for byte in value])
+        password = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_wifi_password(password)
 
 
@@ -218,7 +218,7 @@ class TailscaleKeyCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        key = ''.join([chr(byte) for byte in value])
+        key = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_tailscale_key(key)
 
 
@@ -231,7 +231,7 @@ class ServerIPCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        ip = ''.join([chr(byte) for byte in value])
+        ip = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_server_ip(ip)
 
 
@@ -244,7 +244,7 @@ class StreamNameCharacteristic(Characteristic):
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        name = ''.join([chr(byte) for byte in value])
+        name = bytes(value).decode('utf-8', errors='ignore')
         self.provisioning_data.set_stream_name(name)
 
 
