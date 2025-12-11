@@ -48,11 +48,16 @@ API_PASSWORD=$5
 MANUFACTURING_DATE=$(date +%Y-%m-%d)
 
 # Safety check
-if [ ! -b "$DEVICE" ]; then
-    echo -e "${RED}✗ Error: $DEVICE is not a block device${NC}"
+if [ ! -e "$DEVICE" ]; then
+    echo -e "${RED}✗ Error: $DEVICE does not exist${NC}"
     echo ""
     echo "Available devices:"
-    lsblk | grep disk
+    if command -v lsblk &> /dev/null; then
+        lsblk | grep disk
+    else
+        # macOS
+        diskutil list | grep -E "(disk[0-9]+|Volume)"
+    fi
     exit 1
 fi
 
@@ -74,22 +79,32 @@ if [[ ! "$response" =~ ^[Yy][Ee][Ss]$ ]]; then
     exit 0
 fi
 
-# Determine partition name
-# For /dev/sdb -> /dev/sdb1
-# For /dev/mmcblk0 -> /dev/mmcblk0p1
-if [[ "$DEVICE" == *"mmcblk"* ]] || [[ "$DEVICE" == *"loop"* ]]; then
+# Determine partition name based on OS and device type
+# Linux: /dev/sdb -> /dev/sdb1, /dev/mmcblk0 -> /dev/mmcblk0p1
+# macOS: /dev/disk42 -> /dev/disk42s1
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    BOOT_PARTITION="${DEVICE}s1"
+elif [[ "$DEVICE" == *"mmcblk"* ]] || [[ "$DEVICE" == *"loop"* ]]; then
+    # Linux with mmcblk or loop devices
     BOOT_PARTITION="${DEVICE}p1"
 else
+    # Standard Linux devices
     BOOT_PARTITION="${DEVICE}1"
 fi
 
 echo ""
 echo "Step 1/5: Checking boot partition..."
-if [ ! -b "$BOOT_PARTITION" ]; then
+if [ ! -e "$BOOT_PARTITION" ]; then
     echo -e "${RED}✗ Error: Boot partition not found: $BOOT_PARTITION${NC}"
     echo ""
     echo "Partitions on $DEVICE:"
-    lsblk "$DEVICE"
+    if command -v lsblk &> /dev/null; then
+        lsblk "$DEVICE"
+    else
+        # macOS
+        diskutil list "$DEVICE"
+    fi
     exit 1
 fi
 echo -e "${GREEN}✓${NC} Boot partition found: $BOOT_PARTITION"
@@ -100,20 +115,47 @@ mkdir -p "$MOUNT_POINT"
 
 echo ""
 echo "Step 2/5: Mounting boot partition..."
-if ! sudo mount "$BOOT_PARTITION" "$MOUNT_POINT"; then
-    echo -e "${RED}✗ Error: Failed to mount boot partition${NC}"
-    rmdir "$MOUNT_POINT"
-    exit 1
+
+# Check if already mounted (macOS auto-mounts)
+EXISTING_MOUNT=""
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    EXISTING_MOUNT=$(mount | grep "$BOOT_PARTITION" | awk '{print $3}')
+    if [ -n "$EXISTING_MOUNT" ]; then
+        echo "Note: Partition already mounted at: $EXISTING_MOUNT"
+        MOUNT_POINT="$EXISTING_MOUNT"
+        echo -e "${GREEN}✓${NC} Using existing mount: $MOUNT_POINT"
+    else
+        # Try to mount on macOS
+        if ! sudo mount -t msdos "$BOOT_PARTITION" "$MOUNT_POINT" 2>/dev/null; then
+            echo -e "${RED}✗ Error: Failed to mount boot partition${NC}"
+            echo "Try: diskutil mount $BOOT_PARTITION"
+            rmdir "$MOUNT_POINT"
+            exit 1
+        fi
+        echo -e "${GREEN}✓${NC} Mounted to: $MOUNT_POINT"
+    fi
+else
+    # Linux mount
+    if ! sudo mount "$BOOT_PARTITION" "$MOUNT_POINT"; then
+        echo -e "${RED}✗ Error: Failed to mount boot partition${NC}"
+        rmdir "$MOUNT_POINT"
+        exit 1
+    fi
+    echo -e "${GREEN}✓${NC} Mounted to: $MOUNT_POINT"
 fi
-echo -e "${GREEN}✓${NC} Mounted to: $MOUNT_POINT"
 
 # Cleanup function
 cleanup() {
     echo ""
     echo "Step 5/5: Cleaning up..."
-    sudo umount "$MOUNT_POINT" 2>/dev/null || true
-    rmdir "$MOUNT_POINT" 2>/dev/null || true
-    echo -e "${GREEN}✓${NC} Unmounted and cleaned up"
+    # Only unmount if we mounted it ourselves (not using existing mount)
+    if [ -z "$EXISTING_MOUNT" ]; then
+        sudo umount "$MOUNT_POINT" 2>/dev/null || true
+        rmdir "$MOUNT_POINT" 2>/dev/null || true
+        echo -e "${GREEN}✓${NC} Unmounted and cleaned up"
+    else
+        echo -e "${GREEN}✓${NC} Left existing mount intact"
+    fi
 }
 trap cleanup EXIT
 
