@@ -58,13 +58,14 @@ class RTSPCameraStreamer:
         self.reconnection_delay = 10  # seconds
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 30  # seconds
-        self.last_status_update = 0
-        self.status_update_interval = 60  # seconds
+        self.health_check_interval = 15  # seconds - check more frequently
         self.consecutive_health_failures = 0
-        self.max_health_failures = 5  # Only break after 5 consecutive failures (2.5 min)
+        self.max_health_failures = 3  # Break after 3 consecutive failures (45s) to restart sooner
         self.ip_refresh_interval = 30  # seconds between IP refresh attempts on failure
         self.last_ip_refresh = 0
+
+        # MediaMTX API port (for checking stream status)
+        self.mediamtx_api_port = 9997  # Default MediaMTX API port
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -253,25 +254,31 @@ class RTSPCameraStreamer:
 
                     current_time = time.time()
 
-                    # Periodic health check (informational only - never breaks stream)
-                    # Stream only breaks on actual FFmpeg/camera failures
+                    # Periodic comprehensive health checks
                     if current_time - self.last_health_check >= self.health_check_interval:
-                        if not self.check_server_health():
+                        all_passed, results, critical_failures = self.perform_health_checks()
+
+                        if not all_passed:
                             self.consecutive_health_failures += 1
-                            print(f"⚠ Health check failed ({self.consecutive_health_failures} consecutive)")
+                            print(f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})")
+                            for failure in critical_failures:
+                                print(f"  ✗ {failure}")
+
+                            # If too many consecutive failures, break and restart
+                            if self.consecutive_health_failures >= self.max_health_failures:
+                                print(f"\n✗ Too many consecutive health failures - restarting stream...")
+                                break
                         else:
                             if self.consecutive_health_failures > 0:
-                                print(f"✓ Health check recovered after {self.consecutive_health_failures} failures")
+                                print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
+                                for name, (ok, msg) in results.items():
+                                    print(f"  ✓ {name}: {msg}")
                             self.consecutive_health_failures = 0
+
                         self.last_health_check = current_time
 
-                    # Periodic status update
-                    if current_time - self.last_status_update >= self.status_update_interval:
-                        self.update_device_status("online")
-                        self.last_status_update = current_time
-
-                    # Print status every 5 seconds
-                    if current_time - last_status_time >= 5:
+                    # Print status every 10 seconds (less spam)
+                    if current_time - last_status_time >= 10:
                         elapsed = current_time - start_time
                         print(f"Streaming: {elapsed:.1f}s elapsed, encoder running at {self.fps} fps")
                         last_status_time = current_time
@@ -284,6 +291,9 @@ class RTSPCameraStreamer:
             else:
                 # Legacy camera: Capture frames manually and encode with MJPEG
                 frame_count = 0
+                last_health_check_frame = 0
+                frames_per_health_check = self.fps * self.health_check_interval
+
                 while self.running and not self.shutdown_requested:
                     ret, frame = self.cap.read()
                     if not ret:
@@ -300,11 +310,31 @@ class RTSPCameraStreamer:
                         self.ffmpeg_process.stdin.write(frame.tobytes())
                         frame_count += 1
 
-                        # Print periodic status (every 5 seconds)
-                        if frame_count % (self.fps * 5) == 0:
+                        # Print periodic status (every 10 seconds)
+                        if frame_count % (self.fps * 10) == 0:
                             elapsed = time.time() - start_time
                             actual_fps = frame_count / elapsed if elapsed > 0 else 0
                             print(f"Streaming: {frame_count} frames | {actual_fps:.1f} fps")
+
+                        # Periodic health checks
+                        if frame_count - last_health_check_frame >= frames_per_health_check:
+                            all_passed, results, critical_failures = self.perform_health_checks()
+
+                            if not all_passed:
+                                self.consecutive_health_failures += 1
+                                print(f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})")
+                                for failure in critical_failures:
+                                    print(f"  ✗ {failure}")
+
+                                if self.consecutive_health_failures >= self.max_health_failures:
+                                    print(f"\n✗ Too many consecutive health failures - restarting stream...")
+                                    break
+                            else:
+                                if self.consecutive_health_failures > 0:
+                                    print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
+                                self.consecutive_health_failures = 0
+
+                            last_health_check_frame = frame_count
 
                     except BrokenPipeError:
                         print("✗ FFmpeg pipe broken - stream may have disconnected")
@@ -326,50 +356,154 @@ class RTSPCameraStreamer:
             elapsed = time.time() - start_time
             print(f"\nStreaming stopped after {elapsed:.1f}s")
 
-    def check_server_health(self):
-        """Check if the server is reachable and healthy"""
+    def check_tailscale_connectivity(self):
+        """Check if Tailscale VPN is connected and can reach the server"""
+        try:
+            # Check Tailscale status
+            result = subprocess.run(
+                ['tailscale', 'status', '--json'],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode != 0:
+                return False, "Tailscale not running"
+
+            import json
+            status = json.loads(result.stdout)
+            backend_state = status.get('BackendState', '')
+            if backend_state != 'Running':
+                return False, f"Tailscale state: {backend_state}"
+
+            return True, "Tailscale connected"
+        except Exception as e:
+            return False, f"Tailscale check error: {e}"
+
+    def check_mediamtx_stream_status(self):
+        """Check if our stream is actually registered and active on MediaMTX server
+
+        MediaMTX API returns info about active streams at /v3/paths/list
+        """
         try:
             import requests
 
-            # Try to reach the orchestrator API
-            health_url = f"{self.orchestrator_url}/status"
-            response = requests.get(health_url, timeout=3)
+            # MediaMTX API endpoint
+            api_url = f"http://{self.server_ip}:{self.mediamtx_api_port}/v3/paths/list"
+            response = requests.get(api_url, timeout=5)
 
             if response.status_code == 200:
-                return True
-            else:
-                print(f"⚠ Server health check failed: HTTP {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"⚠ Server health check failed: {e}")
-            return False
+                data = response.json()
+                items = data.get('items', [])
 
-    def update_device_status(self, status):
-        """Update device online/offline status with the API"""
+                # Look for our stream in the list
+                for item in items:
+                    if item.get('name') == self.stream_name:
+                        # Check if stream has readers or is ready
+                        ready = item.get('ready', False)
+                        readers = item.get('readers', [])
+                        source = item.get('source', {})
+
+                        if ready or source:
+                            return True, f"Stream '{self.stream_name}' active on MediaMTX"
+                        else:
+                            return False, f"Stream '{self.stream_name}' found but not ready"
+
+                return False, f"Stream '{self.stream_name}' not found on MediaMTX"
+            else:
+                return False, f"MediaMTX API returned {response.status_code}"
+        except Exception as e:
+            return False, f"MediaMTX API error: {e}"
+
+    def check_api_device_status(self):
+        """Check our device status from the CrowdCount API (read-only)
+
+        If the API thinks we're offline but we think we're streaming,
+        something is wrong and we should restart.
+        """
         if not self.password:
-            return False  # Can't update status without credentials
+            return True, "No credentials - skipping API check"
 
         try:
             import requests
 
-            status_url = f"{self.api_url}/update_status"
-            data = {
+            # Check device status from API
+            status_url = f"{self.api_url}/get_device_status"
+            params = {
                 'user_id': self.device_id,
-                'password': self.password,
-                'status': status
+                'password': self.password
             }
 
-            response = requests.post(status_url, data=data, timeout=5)
+            response = requests.get(status_url, params=params, timeout=5)
 
             if response.status_code == 200:
-                print(f"✓ Device status updated to '{status}'")
-                return True
+                data = response.json()
+                status = data.get('status', 'unknown')
+                if status == 'offline':
+                    return False, "API reports device offline"
+                return True, f"API status: {status}"
+            elif response.status_code == 404:
+                # Endpoint might not exist, skip check
+                return True, "API check not available"
             else:
-                print(f"⚠ Failed to update status: HTTP {response.status_code}")
-                return False
+                return True, f"API returned {response.status_code}"
         except Exception as e:
-            print(f"⚠ Failed to update status: {e}")
-            return False
+            # API errors shouldn't break streaming
+            return True, f"API check skipped: {e}"
+
+    def check_network_connectivity(self):
+        """Basic network connectivity check to the server"""
+        try:
+            import socket
+
+            # Try to connect to the RTSP port
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((self.server_ip, self.rtsp_port))
+            sock.close()
+
+            if result == 0:
+                return True, f"Network OK (port {self.rtsp_port} reachable)"
+            else:
+                return False, f"Cannot reach {self.server_ip}:{self.rtsp_port}"
+        except Exception as e:
+            return False, f"Network check error: {e}"
+
+    def perform_health_checks(self):
+        """Perform comprehensive health checks to verify stream is actually working
+
+        Returns:
+            tuple: (all_passed: bool, results: dict)
+        """
+        results = {}
+        critical_failures = []
+
+        # Check 1: Network connectivity (critical)
+        ok, msg = self.check_network_connectivity()
+        results['network'] = (ok, msg)
+        if not ok:
+            critical_failures.append(f"Network: {msg}")
+
+        # Check 2: Tailscale connectivity (critical)
+        ok, msg = self.check_tailscale_connectivity()
+        results['tailscale'] = (ok, msg)
+        if not ok:
+            critical_failures.append(f"Tailscale: {msg}")
+
+        # Check 3: MediaMTX stream status (critical - this tells us if server is receiving)
+        ok, msg = self.check_mediamtx_stream_status()
+        results['mediamtx'] = (ok, msg)
+        if not ok:
+            critical_failures.append(f"MediaMTX: {msg}")
+
+        # Check 4: API device status (informational - server's view of our status)
+        ok, msg = self.check_api_device_status()
+        results['api_status'] = (ok, msg)
+        # API check is not critical - we don't add to critical_failures
+
+        # Determine overall health
+        all_passed = len(critical_failures) == 0
+
+        return all_passed, results, critical_failures
 
     def fetch_streaming_server_ip(self):
         """Fetch the streaming server IP from the CrowdCount API
@@ -424,7 +558,6 @@ class RTSPCameraStreamer:
         """Register device information with the server"""
         try:
             import requests
-            import json
 
             register_url = f"{self.orchestrator_url}/device/register"
             payload = {
@@ -438,8 +571,6 @@ class RTSPCameraStreamer:
 
             if response.status_code == 200:
                 print(f"✓ Device registered: {self.device_id}")
-                # Update API status to online
-                self.update_device_status("online")
                 return True
             else:
                 print(f"⚠ Warning: Failed to register device (server returned {response.status_code})")
@@ -579,15 +710,6 @@ class RTSPCameraStreamer:
         """Clean up resources"""
         print("\nCleaning up...")
         self.running = False
-
-        # Update device status to offline
-        if not self.shutdown_requested:
-            # Only mark as offline if not a normal shutdown
-            # (normal shutdown will be followed by reconnection)
-            pass
-        else:
-            # Graceful shutdown - mark as offline
-            self.update_device_status("offline")
 
         # Close camera
         if self.picam2:
