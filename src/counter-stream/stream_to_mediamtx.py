@@ -540,7 +540,7 @@ class RTSPCameraStreamer:
 
             if response.status_code == 200:
                 data = response.json()
-                new_ip = data.get('server_ip') or data.get('ip') or data.get('streaming_ip')
+                new_ip = data.get('server_ip') or data.get('ip') or data.get('streaming_ip') or data.get('streaming_server_ip')
                 if new_ip:
                     print(f"✓ Got streaming server IP from API: {new_ip}")
                     return new_ip

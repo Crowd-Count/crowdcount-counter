@@ -69,9 +69,7 @@ class CrowdCountMain:
         # Load device config (for Tailscale auth key)
         if DEVICE_CONFIG.exists():
             try:
-                config = configparser.ConfigParser()
-                config.read(DEVICE_CONFIG)
-                # Try to read from file (it's not INI format, so read raw)
+                # Read raw file (it's in KEY=VALUE format, not INI)
                 with open(DEVICE_CONFIG) as f:
                     for line in f:
                         if line.startswith('TAILSCALE_AUTH_KEY='):
