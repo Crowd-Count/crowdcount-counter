@@ -43,14 +43,10 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
-        # Use RTSP for publishing with authentication
-        # Format: rtsp://device_id:password@server:port/stream_name
-        if device_id and password:
-            self.publish_url = f"rtsp://{device_id}:{password}@{server_ip}:{rtsp_port}/{stream_name}"
-            self.rtsp_url = f"rtsp://{device_id}:{password}@{server_ip}:{rtsp_port}/{stream_name}"
-        else:
-            self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
-            self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        # Use RTSP for publishing - no authentication (secured by Tailscale VPN)
+        # Format: rtsp://server:port/stream_name
+        self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.orchestrator_url = f"http://{server_ip}:5000"
         self.api_url = api_url if api_url else "https://api.crowdcount.tech"
 
@@ -393,14 +389,11 @@ class RTSPCameraStreamer:
         """
         try:
             import requests
-            from requests.auth import HTTPBasicAuth
 
-            # MediaMTX API endpoint with authentication
+            # MediaMTX API endpoint (no authentication - secured by Tailscale)
             api_url = f"http://{self.server_ip}:{self.mediamtx_api_port}/v3/paths/list"
 
-            # Use HTTP Basic Auth with device credentials
-            auth = HTTPBasicAuth(self.device_id, self.password) if self.device_id and self.password else None
-            response = requests.get(api_url, auth=auth, timeout=5)
+            response = requests.get(api_url, timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
@@ -559,13 +552,9 @@ class RTSPCameraStreamer:
         if new_ip and new_ip != self.server_ip:
             print(f"Updating server IP: {self.server_ip} → {new_ip}")
             self.server_ip = new_ip
-            # Rebuild URLs with credentials
-            if self.device_id and self.password:
-                self.publish_url = f"rtsp://{self.device_id}:{self.password}@{new_ip}:{self.rtsp_port}/{self.stream_name}"
-                self.rtsp_url = f"rtsp://{self.device_id}:{self.password}@{new_ip}:{self.rtsp_port}/{self.stream_name}"
-            else:
-                self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
-                self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            # Rebuild URLs without credentials (secured by Tailscale VPN)
+            self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
             self.orchestrator_url = f"http://{new_ip}:5000"
             return True
         return False
