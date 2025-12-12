@@ -43,9 +43,14 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
-        # Use RTSP for publishing (MJPEG - low CPU)
-        self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
-        self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+        # Use RTSP for publishing with authentication
+        # Format: rtsp://device_id:password@server:port/stream_name
+        if device_id and password:
+            self.publish_url = f"rtsp://{device_id}:{password}@{server_ip}:{rtsp_port}/{stream_name}"
+            self.rtsp_url = f"rtsp://{device_id}:{password}@{server_ip}:{rtsp_port}/{stream_name}"
+        else:
+            self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
+            self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.orchestrator_url = f"http://{server_ip}:5000"
         self.api_url = api_url if api_url else "https://api.crowdcount.tech"
 
@@ -194,8 +199,10 @@ class RTSPCameraStreamer:
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
                 print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
-            print(f"Publishing stream to: {self.publish_url}")
-            print(f"Stream will be available at: {self.rtsp_url}")
+            # Print URL without exposing password
+            display_url = f"rtsp://{self.server_ip}:{self.rtsp_port}/{self.stream_name}"
+            print(f"Publishing stream to: {display_url}")
+            print(f"Stream will be available at: {display_url}")
 
             # Start ffmpeg process
             self.ffmpeg_process = subprocess.Popen(
@@ -386,10 +393,14 @@ class RTSPCameraStreamer:
         """
         try:
             import requests
+            from requests.auth import HTTPBasicAuth
 
-            # MediaMTX API endpoint
+            # MediaMTX API endpoint with authentication
             api_url = f"http://{self.server_ip}:{self.mediamtx_api_port}/v3/paths/list"
-            response = requests.get(api_url, timeout=5)
+
+            # Use HTTP Basic Auth with device credentials
+            auth = HTTPBasicAuth(self.device_id, self.password) if self.device_id and self.password else None
+            response = requests.get(api_url, auth=auth, timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
@@ -548,8 +559,13 @@ class RTSPCameraStreamer:
         if new_ip and new_ip != self.server_ip:
             print(f"Updating server IP: {self.server_ip} → {new_ip}")
             self.server_ip = new_ip
-            self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
-            self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            # Rebuild URLs with credentials
+            if self.device_id and self.password:
+                self.publish_url = f"rtsp://{self.device_id}:{self.password}@{new_ip}:{self.rtsp_port}/{self.stream_name}"
+                self.rtsp_url = f"rtsp://{self.device_id}:{self.password}@{new_ip}:{self.rtsp_port}/{self.stream_name}"
+            else:
+                self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
+                self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
             self.orchestrator_url = f"http://{new_ip}:5000"
             return True
         return False
