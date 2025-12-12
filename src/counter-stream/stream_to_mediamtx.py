@@ -59,9 +59,9 @@ class RTSPCameraStreamer:
         self.reconnection_delay = 10  # seconds
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 15  # seconds - check more frequently
+        self.health_check_interval = 30  # seconds - balanced for Pi Zero 2 W
         self.consecutive_health_failures = 0
-        self.max_health_failures = 3  # Break after 3 consecutive failures (45s) to restart sooner
+        self.max_health_failures = 5  # More tolerance before restart (2.5 minutes)
         self.ip_refresh_interval = 30  # seconds between IP refresh attempts on failure
         self.last_ip_refresh = 0
 
@@ -177,7 +177,7 @@ class RTSPCameraStreamer:
             else:
                 # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
                 # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
-                bitrate = 2500000  # 2.5 Mbps for 640p @ 30fps (increased for better quality)
+                bitrate = 1200000  # 1.2 Mbps for 640p @ 30fps (optimized for Pi Zero 2 W)
                 ffmpeg_cmd = [
                     'ffmpeg',
                     '-f', 'h264',  # Input is H.264 elementary stream
@@ -234,8 +234,8 @@ class RTSPCameraStreamer:
                     return
 
                 # Create H.264 encoder with appropriate bitrate
-                # For 640p @ 30fps: 2.5 Mbps provides good quality without frame drops
-                bitrate = 2500000
+                # For Pi Zero 2 W: 1.2 Mbps is optimal for 640x480@30fps (balanced quality/performance)
+                bitrate = 1200000
                 encoder = H264Encoder(bitrate=bitrate, framerate=self.fps)
 
                 # Output directly to FFmpeg stdin
@@ -457,25 +457,20 @@ class RTSPCameraStreamer:
             return True, f"API check skipped: {e}"
 
     def check_network_connectivity(self):
-        """Basic network connectivity check to the server"""
-        try:
-            import socket
+        """Basic network connectivity check to the server
 
-            # Try to connect to the RTSP port
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            result = sock.connect_ex((self.server_ip, self.rtsp_port))
-            sock.close()
-
-            if result == 0:
-                return True, f"Network OK (port {self.rtsp_port} reachable)"
-            else:
-                return False, f"Cannot reach {self.server_ip}:{self.rtsp_port}"
-        except Exception as e:
-            return False, f"Network check error: {e}"
+        NOTE: Disabled socket connection check to avoid interfering with active RTSP stream.
+        On Pi Zero 2 W, opening additional connections can cause issues.
+        We rely on FFmpeg process status and MediaMTX stream status instead.
+        """
+        # Skip socket check - FFmpeg already has the connection, don't interfere
+        return True, "Network check skipped (relying on FFmpeg/MediaMTX status)"
 
     def perform_health_checks(self):
         """Perform comprehensive health checks to verify stream is actually working
+
+        Optimized for Pi Zero 2 W - focuses on critical MediaMTX check only.
+        Network and Tailscale checks are skipped to reduce CPU/network overhead.
 
         Returns:
             tuple: (all_passed: bool, results: dict)
@@ -483,28 +478,15 @@ class RTSPCameraStreamer:
         results = {}
         critical_failures = []
 
-        # Check 1: Network connectivity (critical)
-        ok, msg = self.check_network_connectivity()
-        results['network'] = (ok, msg)
-        if not ok:
-            critical_failures.append(f"Network: {msg}")
-
-        # Check 2: Tailscale connectivity (critical)
-        ok, msg = self.check_tailscale_connectivity()
-        results['tailscale'] = (ok, msg)
-        if not ok:
-            critical_failures.append(f"Tailscale: {msg}")
-
-        # Check 3: MediaMTX stream status (critical - this tells us if server is receiving)
+        # Check 1: MediaMTX stream status (CRITICAL - this tells us if server is receiving)
+        # This is the only check we really need - if MediaMTX sees our stream, everything is working
         ok, msg = self.check_mediamtx_stream_status()
         results['mediamtx'] = (ok, msg)
         if not ok:
             critical_failures.append(f"MediaMTX: {msg}")
 
-        # Check 4: API device status (informational - server's view of our status)
-        ok, msg = self.check_api_device_status()
-        results['api_status'] = (ok, msg)
-        # API check is not critical - we don't add to critical_failures
+        # Check 2: FFmpeg process alive (implicit - checked in main loop)
+        # Check 3: Network/Tailscale (skipped - too expensive on Pi Zero 2 W, trust MediaMTX check)
 
         # Determine overall health
         all_passed = len(critical_failures) == 0
