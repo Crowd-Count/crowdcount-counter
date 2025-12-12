@@ -219,6 +219,8 @@ class RTSPCameraStreamer:
     def stream_frames(self):
         """Capture frames and pipe them to ffmpeg"""
         start_time = time.time()
+        # Initialize health check timer - give stream time to establish before first check
+        self.last_health_check = start_time
 
         try:
             if not self.use_legacy_camera:
