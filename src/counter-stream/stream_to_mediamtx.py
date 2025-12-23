@@ -56,13 +56,13 @@ class RTSPCameraStreamer:
         self.running = False
         self.use_legacy_camera = False
         self.reconnection_enabled = True
-        self.reconnection_delay = 10  # seconds
+        self.reconnection_delay = 5  # seconds (reduced from 10 for faster recovery)
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 30  # seconds - balanced for Pi Zero 2 W
+        self.health_check_interval = 15  # seconds (reduced from 30 for faster detection)
         self.consecutive_health_failures = 0
-        self.max_health_failures = 5  # More tolerance before restart (2.5 minutes)
-        self.ip_refresh_interval = 30  # seconds between IP refresh attempts on failure
+        self.max_health_failures = 3  # Reduced from 5 (now 45 seconds instead of 2.5 minutes)
+        self.ip_refresh_interval = 15  # seconds between IP refresh attempts (reduced from 30)
         self.last_ip_refresh = 0
 
         # MediaMTX API port (for checking stream status)
@@ -152,8 +152,13 @@ class RTSPCameraStreamer:
         return False
 
     def setup_ffmpeg(self):
-        """Setup ffmpeg process to stream via RTSP"""
+        """Setup ffmpeg process to stream via RTSP with connection timeouts"""
         try:
+            # RTSP timeout options (in microseconds)
+            # These prevent FFmpeg from hanging indefinitely on connection issues
+            rtsp_timeout = '5000000'  # 5 seconds for RTSP operations
+            tcp_timeout = '5000000'   # 5 seconds for TCP socket operations
+
             if self.use_legacy_camera:
                 # Legacy camera: Use MJPEG encoding (software, but lightweight)
                 ffmpeg_cmd = [
@@ -171,6 +176,8 @@ class RTSPCameraStreamer:
                     '-flags', 'low_delay',
                     '-f', 'rtsp',
                     '-rtsp_transport', 'tcp',
+                    '-timeout', rtsp_timeout,  # RTSP socket timeout
+                    '-stimeout', rtsp_timeout,  # Socket TCP I/O timeout
                     self.publish_url
                 ]
                 print("Using MJPEG encoding over RTSP (legacy camera)")
@@ -190,6 +197,8 @@ class RTSPCameraStreamer:
                     '-r', str(self.fps),  # Force output framerate
                     '-f', 'rtsp',  # RTSP format
                     '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
+                    '-timeout', rtsp_timeout,  # RTSP socket timeout (prevents infinite hang)
+                    '-stimeout', rtsp_timeout,  # Socket TCP I/O timeout
                     self.publish_url
                 ]
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
@@ -201,12 +210,13 @@ class RTSPCameraStreamer:
             print(f"Stream will be available at: {display_url}")
 
             # Start ffmpeg process
+            # Reduced buffer size to detect connection issues faster
             self.ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=10**8
+                bufsize=1024*1024  # 1MB buffer (was 100MB - too large, hid connection issues)
             )
 
             print("✓ FFmpeg process started")
@@ -384,6 +394,26 @@ class RTSPCameraStreamer:
         except Exception as e:
             return False, f"Tailscale check error: {e}"
 
+    def check_server_reachable(self):
+        """
+        Quick TCP check to verify server is reachable before starting FFmpeg.
+        This prevents FFmpeg from hanging on connection attempts.
+        """
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)  # 3 second timeout
+            result = sock.connect_ex((self.server_ip, self.rtsp_port))
+            sock.close()
+            if result == 0:
+                return True, f"Server {self.server_ip}:{self.rtsp_port} reachable"
+            else:
+                return False, f"Server {self.server_ip}:{self.rtsp_port} not reachable (error {result})"
+        except socket.timeout:
+            return False, f"Server {self.server_ip}:{self.rtsp_port} connection timeout"
+        except Exception as e:
+            return False, f"Server check error: {e}"
+
     def check_mediamtx_stream_status(self):
         """Check if our stream is actually registered and active on MediaMTX server
 
@@ -434,12 +464,12 @@ class RTSPCameraStreamer:
 
             # Check device status from API
             status_url = f"{self.api_url}/get_device_status"
-            params = {
-                'user_id': self.device_id,
+            payload = {
+                'device_id': self.device_id,
                 'password': self.password
             }
 
-            response = requests.get(status_url, params=params, timeout=5)
+            response = requests.post(status_url, json=payload, timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
@@ -469,24 +499,30 @@ class RTSPCameraStreamer:
     def perform_health_checks(self):
         """Perform comprehensive health checks to verify stream is actually working
 
-        Optimized for Pi Zero 2 W - focuses on critical MediaMTX check only.
-        Network and Tailscale checks are skipped to reduce CPU/network overhead.
+        Optimized for Pi Zero 2 W - quick TCP check + MediaMTX API check.
 
         Returns:
-            tuple: (all_passed: bool, results: dict)
+            tuple: (all_passed: bool, results: dict, critical_failures: list)
         """
         results = {}
         critical_failures = []
 
-        # Check 1: MediaMTX stream status (CRITICAL - this tells us if server is receiving)
+        # Check 1: Quick TCP connection test (fast, detects server down immediately)
+        ok, msg = self.check_server_reachable()
+        results['server_tcp'] = (ok, msg)
+        if not ok:
+            critical_failures.append(f"Server: {msg}")
+            # If server is unreachable, skip MediaMTX API check (it will also fail)
+            return False, results, critical_failures
+
+        # Check 2: MediaMTX stream status (CRITICAL - this tells us if server is receiving)
         # This is the only check we really need - if MediaMTX sees our stream, everything is working
         ok, msg = self.check_mediamtx_stream_status()
         results['mediamtx'] = (ok, msg)
         if not ok:
             critical_failures.append(f"MediaMTX: {msg}")
 
-        # Check 2: FFmpeg process alive (implicit - checked in main loop)
-        # Check 3: Network/Tailscale (skipped - too expensive on Pi Zero 2 W, trust MediaMTX check)
+        # Check 3: FFmpeg process alive (implicit - checked in main loop)
 
         # Determine overall health
         all_passed = len(critical_failures) == 0
@@ -507,13 +543,13 @@ class RTSPCameraStreamer:
             import requests
 
             api_endpoint = f"{self.api_url}/get_streaming_server_ip"
-            params = {
-                'user_id': self.device_id,
+            payload = {
+                'device_id': self.device_id,
                 'password': self.password
             }
 
             print(f"Fetching streaming server IP from API...")
-            response = requests.get(api_endpoint, params=params, timeout=10)
+            response = requests.post(api_endpoint, json=payload, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -601,6 +637,30 @@ class RTSPCameraStreamer:
                 print(f"{'=' * 60}")
 
             try:
+                # Check if server is reachable BEFORE doing anything else
+                # This fails fast instead of letting FFmpeg hang
+                reachable, msg = self.check_server_reachable()
+                if not reachable:
+                    print(f"✗ {msg}")
+                    if self.reconnection_enabled and not self.shutdown_requested:
+                        # Server unreachable - try to fetch new IP
+                        current_time = time.time()
+                        if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                            new_ip = self.fetch_streaming_server_ip()
+                            if new_ip:
+                                self.update_server_ip(new_ip)
+                            self.last_ip_refresh = current_time
+
+                        print(f"Retrying in {self.reconnection_delay} seconds...")
+                        for _ in range(self.reconnection_delay):
+                            if self.shutdown_requested:
+                                break
+                            time.sleep(1)
+                        continue
+                    else:
+                        return False
+                print(f"✓ {msg}")
+
                 # Register device with server
                 self.register_device()
 
@@ -696,11 +756,11 @@ class RTSPCameraStreamer:
         return True
 
     def cleanup(self):
-        """Clean up resources"""
+        """Clean up resources - aggressively kills hung processes"""
         print("\nCleaning up...")
         self.running = False
 
-        # Close camera
+        # Close camera FIRST (stop feeding data to FFmpeg)
         if self.picam2:
             try:
                 # Stop encoder if it's running
@@ -723,18 +783,40 @@ class RTSPCameraStreamer:
                 pass
             self.cap = None
 
-        # Close ffmpeg
+        # Close ffmpeg - be aggressive to prevent hung processes
         if self.ffmpeg_process:
             try:
-                self.ffmpeg_process.stdin.close()
-                self.ffmpeg_process.wait(timeout=5)
-                print("✓ Closed ffmpeg process")
-            except Exception:
+                # First try graceful shutdown
                 try:
-                    self.ffmpeg_process.kill()
-                    print("✓ Killed ffmpeg process")
+                    self.ffmpeg_process.stdin.close()
                 except Exception:
                     pass
+
+                # Give it 2 seconds to exit gracefully
+                try:
+                    self.ffmpeg_process.wait(timeout=2)
+                    print("✓ FFmpeg exited gracefully")
+                except subprocess.TimeoutExpired:
+                    # Process didn't exit - terminate it
+                    print("⚠ FFmpeg didn't exit, sending SIGTERM...")
+                    self.ffmpeg_process.terminate()
+                    try:
+                        self.ffmpeg_process.wait(timeout=2)
+                        print("✓ FFmpeg terminated")
+                    except subprocess.TimeoutExpired:
+                        # Still didn't exit - force kill
+                        print("⚠ FFmpeg didn't terminate, sending SIGKILL...")
+                        self.ffmpeg_process.kill()
+                        self.ffmpeg_process.wait(timeout=1)
+                        print("✓ FFmpeg killed")
+            except Exception as e:
+                # Last resort - try to kill by PID
+                try:
+                    import os
+                    os.kill(self.ffmpeg_process.pid, signal.SIGKILL)
+                    print(f"✓ Force killed FFmpeg (PID {self.ffmpeg_process.pid})")
+                except Exception:
+                    print(f"⚠ Could not kill FFmpeg: {e}")
             self.ffmpeg_process = None
 
         print("✓ Cleanup completed\n")
