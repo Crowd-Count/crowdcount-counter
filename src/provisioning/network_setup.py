@@ -11,6 +11,17 @@ import re
 import requests
 from pathlib import Path
 
+# Import video config
+try:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from video_config import VIDEO_FPS, VIDEO_WIDTH, VIDEO_HEIGHT
+except ImportError:
+    # Fallback defaults if config not found
+    VIDEO_FPS = 15
+    VIDEO_WIDTH = 640
+    VIDEO_HEIGHT = 480
+
 
 class NetworkSetup:
     """Manages WiFi and Tailscale network configuration"""
@@ -424,9 +435,9 @@ SERVER_IP={server_ip}
 RTSP_PORT=8554
 
 # Video settings
-WIDTH=640
-HEIGHT=480
-FPS=30
+WIDTH={VIDEO_WIDTH}
+HEIGHT={VIDEO_HEIGHT}
+FPS={VIDEO_FPS}
 
 # CrowdCount API URL
 API_URL=https://api.crowdcount.tech

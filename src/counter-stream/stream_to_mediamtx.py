@@ -18,9 +18,21 @@ except ImportError:
     PICAMERA2_AVAILABLE = False
     print("picamera2 not available, will use legacy camera")
 
+# Import video config - try relative import first, then absolute
+try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from video_config import VIDEO_FPS, VIDEO_WIDTH, VIDEO_HEIGHT
+except ImportError:
+    # Fallback defaults if config not found
+    VIDEO_FPS = 15
+    VIDEO_WIDTH = 640
+    VIDEO_HEIGHT = 480
+
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=640, height=480, fps=30, rtsp_port=8554, device_id=None, password=None, api_url=None):
+    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, device_id=None, password=None, api_url=None):
         """
         Initialize the RTSP camera streamer
 
@@ -843,12 +855,12 @@ Examples:
                        help='Tailscale IP address of MediaMTX server (e.g., 100.72.64.80)')
     parser.add_argument('stream_name',
                        help='Unique name for this camera stream (e.g., camera1, entrance, counter1)')
-    parser.add_argument('--width', type=int, default=640,
-                       help='Video width in pixels (default: 640)')
-    parser.add_argument('--height', type=int, default=480,
-                       help='Video height in pixels (default: 480)')
-    parser.add_argument('--fps', type=int, default=30,
-                       help='Frames per second (default: 30)')
+    parser.add_argument('--width', type=int, default=VIDEO_WIDTH,
+                       help=f'Video width in pixels (default: {VIDEO_WIDTH})')
+    parser.add_argument('--height', type=int, default=VIDEO_HEIGHT,
+                       help=f'Video height in pixels (default: {VIDEO_HEIGHT})')
+    parser.add_argument('--fps', type=int, default=VIDEO_FPS,
+                       help=f'Frames per second (default: {VIDEO_FPS})')
     parser.add_argument('--port', type=int, default=8554,
                        help='RTSP port on MediaMTX server (default: 8554)')
     parser.add_argument('--device-id', type=str, default=None,
