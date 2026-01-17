@@ -610,21 +610,26 @@ class RTSPCameraStreamer:
                 print(f"✓ Device registered: {self.device_id}")
                 return True
             elif response.status_code == 401:
-                print(f"✗ Authentication failed: Invalid device_id or password")
-                print(f"  Please check your credentials in device-info.conf")
+                try:
+                    msg = response.json().get('message', 'Invalid credentials')
+                except Exception:
+                    msg = 'Invalid credentials'
+                print(f"✗ Authentication failed: {msg}")
+                print(f"  Device ID: {self.device_id}")
+                print(f"  Check device-identity.conf has correct DEVICE_ID and API_PASSWORD")
                 return False
             elif response.status_code == 400:
                 try:
-                    error_msg = response.json().get('message', 'Bad request')
+                    msg = response.json().get('message', 'Bad request')
                 except Exception:
-                    error_msg = 'Bad request'
-                print(f"✗ Registration error: {error_msg}")
+                    msg = 'Bad request'
+                print(f"✗ Registration error: {msg}")
                 return False
             else:
-                print(f"⚠ Warning: Failed to register device (server returned {response.status_code})")
+                print(f"✗ Registration failed (HTTP {response.status_code})")
                 return False
         except Exception as e:
-            print(f"⚠ Warning: Could not register device: {e}")
+            print(f"✗ Could not connect to server for registration: {e}")
             return False
 
     def start(self):
@@ -682,9 +687,8 @@ class RTSPCameraStreamer:
                         return False
                 print(f"✓ {msg}")
 
-                # Register device with server (validates credentials)
+                # Register device with server (required - validates credentials)
                 if not self.register_device():
-                    print("✗ Failed to register device with server")
                     if self.reconnection_enabled and not self.shutdown_requested:
                         print(f"Retrying in {self.reconnection_delay} seconds...")
                         for _ in range(self.reconnection_delay):
