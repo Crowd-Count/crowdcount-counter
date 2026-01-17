@@ -165,13 +165,8 @@ class RTSPCameraStreamer:
         return False
 
     def setup_ffmpeg(self):
-        """Setup ffmpeg process to stream via RTSP with connection timeouts"""
+        """Setup ffmpeg process to stream via RTSP"""
         try:
-            # RTSP timeout options (in microseconds)
-            # These prevent FFmpeg from hanging indefinitely on connection issues
-            rtsp_timeout = '5000000'  # 5 seconds for RTSP operations
-            tcp_timeout = '5000000'   # 5 seconds for TCP socket operations
-
             if self.use_legacy_camera:
                 # Legacy camera: Use MJPEG encoding (software, but lightweight)
                 ffmpeg_cmd = [
@@ -189,8 +184,6 @@ class RTSPCameraStreamer:
                     '-flags', 'low_delay',
                     '-f', 'rtsp',
                     '-rtsp_transport', 'tcp',
-                    '-timeout', rtsp_timeout,  # RTSP socket timeout
-                    '-stimeout', rtsp_timeout,  # Socket TCP I/O timeout
                     self.publish_url
                 ]
                 print("Using MJPEG encoding over RTSP (legacy camera)")
@@ -210,8 +203,6 @@ class RTSPCameraStreamer:
                     '-r', str(self.fps),  # Force output framerate
                     '-f', 'rtsp',  # RTSP format
                     '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
-                    '-timeout', rtsp_timeout,  # RTSP socket timeout (prevents infinite hang)
-                    '-stimeout', rtsp_timeout,  # Socket TCP I/O timeout
                     self.publish_url
                 ]
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
@@ -223,13 +214,12 @@ class RTSPCameraStreamer:
             print(f"Stream will be available at: {display_url}")
 
             # Start ffmpeg process
-            # Reduced buffer size to detect connection issues faster
             self.ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=1024*1024  # 1MB buffer (was 100MB - too large, hid connection issues)
+                bufsize=10**8  # 100MB buffer
             )
 
             print("✓ FFmpeg process started")
