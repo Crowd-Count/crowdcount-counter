@@ -592,7 +592,7 @@ class RTSPCameraStreamer:
         return False
 
     def register_device(self):
-        """Register device information with the server"""
+        """Register device information with the server. Returns True if successful, False if auth failed."""
         try:
             import requests
 
@@ -609,13 +609,22 @@ class RTSPCameraStreamer:
             if response.status_code == 200:
                 print(f"✓ Device registered: {self.device_id}")
                 return True
+            elif response.status_code == 401:
+                print(f"✗ Authentication failed: Invalid device_id or password")
+                print(f"  Please check your credentials in device-info.conf")
+                return False
+            elif response.status_code == 400:
+                try:
+                    error_msg = response.json().get('message', 'Bad request')
+                except Exception:
+                    error_msg = 'Bad request'
+                print(f"✗ Registration error: {error_msg}")
+                return False
             else:
                 print(f"⚠ Warning: Failed to register device (server returned {response.status_code})")
-                print(f"  Continuing anyway...")
                 return False
         except Exception as e:
             print(f"⚠ Warning: Could not register device: {e}")
-            print(f"  Continuing anyway...")
             return False
 
     def start(self):
@@ -673,8 +682,18 @@ class RTSPCameraStreamer:
                         return False
                 print(f"✓ {msg}")
 
-                # Register device with server
-                self.register_device()
+                # Register device with server (validates credentials)
+                if not self.register_device():
+                    print("✗ Failed to register device with server")
+                    if self.reconnection_enabled and not self.shutdown_requested:
+                        print(f"Retrying in {self.reconnection_delay} seconds...")
+                        for _ in range(self.reconnection_delay):
+                            if self.shutdown_requested:
+                                break
+                            time.sleep(1)
+                        continue
+                    else:
+                        return False
 
                 # Setup camera
                 if not self.setup_camera():
