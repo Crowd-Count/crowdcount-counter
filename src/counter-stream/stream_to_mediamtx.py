@@ -68,13 +68,14 @@ class RTSPCameraStreamer:
         self.running = False
         self.use_legacy_camera = False
         self.reconnection_enabled = True
-        self.reconnection_delay = 5  # seconds (reduced from 10 for faster recovery)
+        self.reconnection_delay = 5  # seconds
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 15  # seconds (reduced from 30 for faster detection)
+        self.health_check_interval = 30  # seconds between health checks
+        self.initial_health_check_delay = 30  # seconds before first health check (give stream time to establish)
         self.consecutive_health_failures = 0
-        self.max_health_failures = 3  # Reduced from 5 (now 45 seconds instead of 2.5 minutes)
-        self.ip_refresh_interval = 15  # seconds between IP refresh attempts (reduced from 30)
+        self.max_health_failures = 5  # failures before restart
+        self.ip_refresh_interval = 30  # seconds between IP refresh attempts
         self.last_ip_refresh = 0
 
         # MediaMTX API port (for checking stream status)
@@ -241,8 +242,11 @@ class RTSPCameraStreamer:
     def stream_frames(self):
         """Capture frames and pipe them to ffmpeg"""
         start_time = time.time()
-        # Initialize health check timer - give stream time to establish before first check
-        self.last_health_check = start_time
+        # Initialize health check timer - delay first check to give stream time to establish
+        # By setting last_health_check to (start_time - interval + initial_delay),
+        # the first check happens after initial_health_check_delay seconds
+        self.last_health_check = start_time + self.initial_health_check_delay - self.health_check_interval
+        self.consecutive_health_failures = 0  # Reset failures on new stream
 
         try:
             if not self.use_legacy_camera:
@@ -441,26 +445,32 @@ class RTSPCameraStreamer:
 
             if response.status_code == 200:
                 data = response.json()
-                items = data.get('items', [])
+                items = data.get('items') or []
 
                 # Look for our stream in the list
                 for item in items:
                     if item.get('name') == self.stream_name:
-                        # Check if stream has readers or is ready
+                        # Stream exists - consider it OK even if not fully "ready" yet
+                        # The stream needs time to establish, and "ready" can be delayed
                         ready = item.get('ready', False)
-                        readers = item.get('readers', [])
-                        source = item.get('source', {})
+                        source = item.get('source')
 
-                        if ready or source:
-                            return True, f"Stream '{self.stream_name}' active on MediaMTX"
+                        if ready:
+                            return True, f"Stream '{self.stream_name}' ready on MediaMTX"
+                        elif source:
+                            return True, f"Stream '{self.stream_name}' publishing to MediaMTX"
                         else:
-                            return False, f"Stream '{self.stream_name}' found but not ready"
+                            # Stream exists but not ready yet - this is OK, give it time
+                            return True, f"Stream '{self.stream_name}' exists on MediaMTX (initializing)"
 
+                # Stream not found at all - this is a real problem
                 return False, f"Stream '{self.stream_name}' not found on MediaMTX"
             else:
-                return False, f"MediaMTX API returned {response.status_code}"
+                # API error - don't fail health check for API issues
+                return True, f"MediaMTX API returned {response.status_code} (skipping check)"
         except Exception as e:
-            return False, f"MediaMTX API error: {e}"
+            # Connection error to MediaMTX API - don't fail for this
+            return True, f"MediaMTX API check skipped: {e}"
 
     def check_api_device_status(self):
         """Check our device status from the CrowdCount API (read-only)
