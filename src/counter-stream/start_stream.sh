@@ -91,11 +91,24 @@ API_PASSWORD=$(get_config_value "API_PASSWORD" "" "$IDENTITY_FILE")
 
 # Read remaining configuration from device-info.conf
 SERVER_IP=$(get_config_value "SERVER_IP" "")
-RTSP_PORT=$(get_config_value "RTSP_PORT" "8554")
+USE_DEV_SERVER=$(get_config_value "USE_DEV_SERVER" "false")
 WIDTH=$(get_config_value "WIDTH" "640")
 HEIGHT=$(get_config_value "HEIGHT" "480")
 FPS=$(get_config_value "FPS" "30")
 API_URL=$(get_config_value "API_URL" "https://api.crowdcount.tech")
+
+# Set ports based on USE_DEV_SERVER toggle
+# Production: RTSP 8554, API 5000
+# Development: RTSP 8555, API 5001
+if [ "$USE_DEV_SERVER" = "true" ]; then
+    RTSP_PORT=8555
+    ORCHESTRATOR_PORT=5001
+    echo "Using DEVELOPMENT server (ports: RTSP=$RTSP_PORT, API=$ORCHESTRATOR_PORT)"
+else
+    RTSP_PORT=8554
+    ORCHESTRATOR_PORT=5000
+    echo "Using PRODUCTION server (ports: RTSP=$RTSP_PORT, API=$ORCHESTRATOR_PORT)"
+fi
 
 # Validate required settings
 if [ -z "$DEVICE_ID" ]; then
@@ -123,7 +136,7 @@ echo ""
 
 # Build command
 # Note: $DEVICE_ID is used as both stream_name (positional arg) and device_id (defaults to stream_name if not specified)
-CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT"
+CMD="python3 $STREAM_SCRIPT $SERVER_IP $DEVICE_ID --width $WIDTH --height $HEIGHT --fps $FPS --port $RTSP_PORT --orchestrator-port $ORCHESTRATOR_PORT"
 
 # Add API password if provided
 if [ -n "$API_PASSWORD" ]; then

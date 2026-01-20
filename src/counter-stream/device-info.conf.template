@@ -5,7 +5,15 @@
 # MediaMTX server Tailscale IP address (same for all devices)
 SERVER_IP=100.72.64.80
 
-# RTSP port (default: 8554)
+# =============================================================================
+# SERVER ENVIRONMENT TOGGLE
+# =============================================================================
+# Set to "true" to connect to development server, "false" for production
+# Production: RTSP port 8554, API port 5000
+# Development: RTSP port 8555, API port 5001
+USE_DEV_SERVER=false
+
+# RTSP port (auto-set based on USE_DEV_SERVER, but can be overridden)
 RTSP_PORT=8554
 
 # Video settings (same for all devices)

@@ -32,7 +32,7 @@ except ImportError:
 
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, device_id=None, password=None, api_url=None):
+    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, orchestrator_port=5000, device_id=None, password=None, api_url=None):
         """
         Initialize the RTSP camera streamer
 
@@ -43,6 +43,7 @@ class RTSPCameraStreamer:
             height: Video height in pixels
             fps: Frames per second
             rtsp_port: RTSP port on MediaMTX server (default: 8554)
+            orchestrator_port: Orchestrator API port (default: 5000, use 5001 for dev)
             device_id: Optional device identifier
             password: Optional password for authentication
             api_url: Optional CrowdCount API URL for status updates
@@ -55,11 +56,12 @@ class RTSPCameraStreamer:
         self.height = height
         self.fps = fps
         self.rtsp_port = rtsp_port
+        self.orchestrator_port = orchestrator_port
         # Use RTSP for publishing - no authentication (secured by Tailscale VPN)
         # Format: rtsp://server:port/stream_name
         self.publish_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
         self.rtsp_url = f"rtsp://{server_ip}:{rtsp_port}/{stream_name}"
-        self.orchestrator_url = f"http://{server_ip}:5000"
+        self.orchestrator_url = f"http://{server_ip}:{orchestrator_port}"
         self.api_url = api_url if api_url else "https://api.crowdcount.tech"
 
         self.picam2 = None
@@ -588,7 +590,7 @@ class RTSPCameraStreamer:
             # Rebuild URLs without credentials (secured by Tailscale VPN)
             self.publish_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
             self.rtsp_url = f"rtsp://{new_ip}:{self.rtsp_port}/{self.stream_name}"
-            self.orchestrator_url = f"http://{new_ip}:5000"
+            self.orchestrator_url = f"http://{new_ip}:{self.orchestrator_port}"
             return True
         return False
 
@@ -887,6 +889,8 @@ Examples:
                        help=f'Frames per second (default: {VIDEO_FPS})')
     parser.add_argument('--port', type=int, default=8554,
                        help='RTSP port on MediaMTX server (default: 8554)')
+    parser.add_argument('--orchestrator-port', type=int, default=5000,
+                       help='Orchestrator API port (default: 5000, use 5001 for dev server)')
     parser.add_argument('--device-id', type=str, default=None,
                        help='Device identifier (defaults to stream_name if not provided)')
     parser.add_argument('--password', type=str, default='',
@@ -904,6 +908,7 @@ Examples:
         height=args.height,
         fps=args.fps,
         rtsp_port=args.port,
+        orchestrator_port=args.orchestrator_port,
         device_id=args.device_id,
         password=args.password,
         api_url=args.api_url
