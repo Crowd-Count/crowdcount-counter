@@ -71,10 +71,10 @@ class RTSPCameraStreamer:
         self.reconnection_delay = 5  # seconds
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 30  # seconds between health checks
-        self.initial_health_check_delay = 30  # seconds before first health check (give stream time to establish)
+        self.health_check_interval = 60  # seconds between health checks (increased from 30 for stability)
+        self.initial_health_check_delay = 60  # seconds before first health check (give stream time to establish)
         self.consecutive_health_failures = 0
-        self.max_health_failures = 5  # failures before restart
+        self.max_health_failures = 10  # failures before restart (increased from 5 for more tolerance)
         self.ip_refresh_interval = 30  # seconds between IP refresh attempts
         self.last_ip_refresh = 0
 
@@ -197,10 +197,11 @@ class RTSPCameraStreamer:
                     '-r', str(self.fps),  # Force input framerate
                     '-i', '-',  # Read from stdin
                     '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
-                    '-fflags', 'nobuffer+flush_packets',  # Disable buffering + flush packets immediately
+                    '-fflags', 'nobuffer+flush_packets+genpts',  # Disable buffering + flush + generate PTS
                     '-flags', 'low_delay',  # Low delay mode
                     '-max_delay', '0',  # Minimum delay
                     '-r', str(self.fps),  # Force output framerate
+                    '-vsync', 'cfr',  # Constant frame rate output
                     '-f', 'rtsp',  # RTSP format
                     '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
                     self.publish_url
@@ -431,7 +432,7 @@ class RTSPCameraStreamer:
             # MediaMTX API endpoint (no authentication - secured by Tailscale)
             api_url = f"http://{self.server_ip}:{self.mediamtx_api_port}/v3/paths/list"
 
-            response = requests.get(api_url, timeout=5)
+            response = requests.get(api_url, timeout=10)  # Increased timeout for stability
 
             if response.status_code == 200:
                 data = response.json()
