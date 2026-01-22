@@ -10,6 +10,7 @@ import time
 import sys
 import argparse
 import signal
+import threading
 
 try:
     from picamera2 import Picamera2
@@ -73,12 +74,17 @@ class RTSPCameraStreamer:
         self.reconnection_delay = 5  # seconds
         self.shutdown_requested = False
         self.last_health_check = 0
-        self.health_check_interval = 60  # seconds between health checks (increased from 30 for stability)
-        self.initial_health_check_delay = 60  # seconds before first health check (give stream time to establish)
+        self.health_check_interval = 30  # seconds between health checks
+        self.initial_health_check_delay = 30  # seconds before first health check (give stream time to establish)
         self.consecutive_health_failures = 0
-        self.max_health_failures = 10  # failures before restart (increased from 5 for more tolerance)
+        self.max_health_failures = 5  # failures before restart (5 failures * 30s = 2.5 min to restart)
         self.ip_refresh_interval = 30  # seconds between IP refresh attempts
         self.last_ip_refresh = 0
+
+        # FFmpeg connection monitoring
+        self.ffmpeg_connection_lost = False
+        self.ffmpeg_stderr_thread = None
+        self.ffmpeg_last_error = None
 
         # MediaMTX API port (for checking stream status)
         self.mediamtx_api_port = 9997  # Default MediaMTX API port
@@ -182,7 +188,7 @@ class RTSPCameraStreamer:
                     '-c:v', 'mjpeg',
                     '-pix_fmt', 'yuvj422p',
                     '-q:v', '5',
-                    '-fflags', 'nobuffer',
+                    '-fflags', '+genpts',     # Generate PTS (changed from nobuffer for consistency)
                     '-flags', 'low_delay',
                     '-f', 'rtsp',
                     '-rtsp_transport', 'tcp',
@@ -192,22 +198,20 @@ class RTSPCameraStreamer:
             else:
                 # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
                 # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
-                bitrate = 1200000  # 1.2 Mbps for 640p @ 30fps (optimized for Pi Zero 2 W)
+                bitrate = 1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
                 ffmpeg_cmd = [
                     'ffmpeg',
                     '-f', 'h264',  # Input is H.264 elementary stream
-                    '-r', str(self.fps),  # Force input framerate
+                    '-r', str(self.fps),  # Input framerate hint
                     '-i', '-',  # Read from stdin
                     '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
-                    '-fflags', 'nobuffer+flush_packets+genpts',  # Disable buffering + flush + generate PTS
+                    '-fflags', '+genpts',  # Generate PTS (removed nobuffer - let FFmpeg handle jitter)
                     '-flags', 'low_delay',  # Low delay mode
-                    '-max_delay', '0',  # Minimum delay
-                    '-r', str(self.fps),  # Force output framerate
-                    '-vsync', 'cfr',  # Constant frame rate output
                     '-f', 'rtsp',  # RTSP format
                     '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
                     self.publish_url
                 ]
+                # Removed: duplicate -r output, -vsync cfr (caused frame drops), nobuffer (caused jitter issues)
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
                 print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
@@ -217,20 +221,73 @@ class RTSPCameraStreamer:
             print(f"Stream will be available at: {display_url}")
 
             # Start ffmpeg process
+            # Buffer reduced from 100MB to 5MB - large buffers hide connection failures
+            # and cause latency buildup. 5MB = ~30 seconds of 1.2Mbps video, enough for jitter
             self.ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=10**8  # 100MB buffer
+                bufsize=5 * 1024 * 1024  # 5MB buffer
             )
 
             print("✓ FFmpeg process started")
+
+            # Start stderr monitoring thread to detect connection failures early
+            self.ffmpeg_connection_lost = False
+            self.ffmpeg_last_error = None
+            self.ffmpeg_stderr_thread = threading.Thread(target=self._monitor_ffmpeg_stderr, daemon=True)
+            self.ffmpeg_stderr_thread.start()
+
             return True
 
         except Exception as e:
             print(f"✗ Error setting up ffmpeg: {e}")
             return False
+
+    def _monitor_ffmpeg_stderr(self):
+        """Monitor FFmpeg stderr for connection errors in a background thread.
+
+        Detects connection failures that don't cause FFmpeg to exit immediately
+        (e.g., TCP connection reset, timeouts, broken pipe).
+        """
+        connection_error_patterns = [
+            b'Connection refused',
+            b'Connection reset',
+            b'Connection timed out',
+            b'Broken pipe',
+            b'No route to host',
+            b'Network is unreachable',
+            b'Connection closed',
+            b'Error writing trailer',
+            b'av_interleaved_write_frame',
+            b'muxing overhead',  # Often appears before connection loss
+            b'Socket',              # Socket errors
+            b'Timeout',             # Uppercase timeout
+            b'EAGAIN',              # Socket would block
+            b'ECONNRESET',          # Connection reset by peer
+            b'EOF',                 # End of stream
+            b'failed to',           # Generic failure messages
+        ]
+
+        try:
+            while self.ffmpeg_process and self.ffmpeg_process.poll() is None and self.running:
+                # Read stderr line by line (non-blocking would be better but this is simpler)
+                line = self.ffmpeg_process.stderr.readline()
+                if not line:
+                    break
+
+                # Check for connection error patterns
+                for pattern in connection_error_patterns:
+                    if pattern in line:
+                        self.ffmpeg_last_error = line.decode('utf-8', errors='ignore').strip()
+                        self.ffmpeg_connection_lost = True
+                        print(f"⚠ FFmpeg connection error detected: {self.ffmpeg_last_error}")
+                        return
+
+        except Exception as e:
+            # Thread cleanup on error
+            pass
 
     def stream_frames(self):
         """Capture frames and pipe them to ffmpeg"""
@@ -252,10 +309,12 @@ class RTSPCameraStreamer:
                     print("✗ Error: picamera2 encoder not available")
                     return
 
-                # Create H.264 encoder with appropriate bitrate
-                # For Pi Zero 2 W: 1.2 Mbps is optimal for 640x480@30fps (balanced quality/performance)
+                # Create H.264 encoder with appropriate bitrate and keyframe interval
+                # For Pi Zero 2 W: 1.2 Mbps is optimal for 640x480@15fps (balanced quality/performance)
                 bitrate = 1200000
-                encoder = H264Encoder(bitrate=bitrate, framerate=self.fps)
+                # idrperiod=15 means keyframe every 1 second at 15fps
+                # This allows faster recovery from packet loss (was default ~60 = 4 seconds)
+                encoder = H264Encoder(bitrate=bitrate, framerate=self.fps, idrperiod=15)
 
                 # Output directly to FFmpeg stdin
                 output = FileOutput(self.ffmpeg_process.stdin)
@@ -274,6 +333,11 @@ class RTSPCameraStreamer:
                         if stderr:
                             print("FFmpeg error output:")
                             print(stderr[-1000:])
+                        break
+
+                    # Check if FFmpeg connection was lost (detected by stderr monitor)
+                    if self.ffmpeg_connection_lost:
+                        print(f"✗ FFmpeg connection lost: {self.ffmpeg_last_error}")
                         break
 
                     current_time = time.time()
