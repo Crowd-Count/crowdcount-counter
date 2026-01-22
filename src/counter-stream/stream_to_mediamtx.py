@@ -33,7 +33,7 @@ except ImportError:
 
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, orchestrator_port=5000, device_id=None, password=None, api_url=None):
+    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, orchestrator_port=5000, device_id=None, password=None, api_url=None, dev_mode=False):
         """
         Initialize the RTSP camera streamer
 
@@ -87,7 +87,12 @@ class RTSPCameraStreamer:
         self.ffmpeg_last_error = None
 
         # MediaMTX API port (for checking stream status)
-        self.mediamtx_api_port = 9997  # Default MediaMTX API port
+        # Dev server uses port 9998, prod uses 9997
+        self.dev_mode = dev_mode
+        if dev_mode:
+            self.mediamtx_api_port = 9998  # Dev server
+        else:
+            self.mediamtx_api_port = 9997  # Prod server (default)
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -961,6 +966,8 @@ Examples:
                        help='Optional password for authentication')
     parser.add_argument('--api-url', type=str, default='https://api.crowdcount.tech',
                        help='CrowdCount API URL for status updates (default: https://api.crowdcount.tech)')
+    parser.add_argument('--dev', action='store_true',
+                       help='Use development server ports (MediaMTX API 9998 instead of 9997)')
 
     args = parser.parse_args()
 
@@ -975,7 +982,8 @@ Examples:
         orchestrator_port=args.orchestrator_port,
         device_id=args.device_id,
         password=args.password,
-        api_url=args.api_url
+        api_url=args.api_url,
+        dev_mode=args.dev
     )
 
     try:
