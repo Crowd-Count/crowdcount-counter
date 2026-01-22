@@ -180,6 +180,21 @@ class RTSPCameraStreamer:
     def setup_ffmpeg(self):
         """Setup ffmpeg process to stream via RTSP"""
         try:
+            # Test RTSP port connectivity before starting FFmpeg
+            import socket
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                result = sock.connect_ex((self.server_ip, self.rtsp_port))
+                sock.close()
+                if result == 0:
+                    print(f"✓ RTSP port {self.rtsp_port} reachable on {self.server_ip}")
+                else:
+                    print(f"⚠ WARNING: RTSP port {self.rtsp_port} not reachable on {self.server_ip} (error {result})")
+                    print("  FFmpeg may fail to connect. Check if MediaMTX is running.")
+            except Exception as e:
+                print(f"⚠ Could not test RTSP connectivity: {e}")
+
             if self.use_legacy_camera:
                 # Legacy camera: Use MJPEG encoding (software, but lightweight)
                 ffmpeg_cmd = [
@@ -206,11 +221,15 @@ class RTSPCameraStreamer:
                 bitrate = 1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
                 ffmpeg_cmd = [
                     'ffmpeg',
+                    # Input options (must come before -i)
+                    '-fflags', '+genpts',  # Generate PTS (input needs timestamps)
+                    '-analyzeduration', '500000',  # 0.5s analysis (faster startup)
+                    '-probesize', '500000',  # 500KB probe (faster startup)
                     '-f', 'h264',  # Input is H.264 elementary stream
                     '-r', str(self.fps),  # Input framerate hint
                     '-i', '-',  # Read from stdin
+                    # Output options
                     '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
-                    '-fflags', '+genpts',  # Generate PTS (removed nobuffer - let FFmpeg handle jitter)
                     '-flags', 'low_delay',  # Low delay mode
                     '-f', 'rtsp',  # RTSP format
                     '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
@@ -220,10 +239,12 @@ class RTSPCameraStreamer:
                 print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
                 print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
-            # Print URL without exposing password
+            # Print URL and command for debugging
             display_url = f"rtsp://{self.server_ip}:{self.rtsp_port}/{self.stream_name}"
             print(f"Publishing stream to: {display_url}")
-            print(f"Stream will be available at: {display_url}")
+            # Print the full FFmpeg command (hide passwords if any)
+            cmd_str = ' '.join(ffmpeg_cmd).replace(self.publish_url, display_url)
+            print(f"FFmpeg command: {cmd_str}")
 
             # Start ffmpeg process
             # Buffer reduced from 100MB to 5MB - large buffers hide connection failures
@@ -271,9 +292,13 @@ class RTSPCameraStreamer:
             b'Timeout',             # Uppercase timeout
             b'EAGAIN',              # Socket would block
             b'ECONNRESET',          # Connection reset by peer
-            b'EOF',                 # End of stream
-            b'failed to',           # Generic failure messages
+            b'End of file',         # End of stream (more specific than EOF)
+            b'failed to connect',   # Connection failure (more specific)
         ]
+
+        # Print first 20 lines of FFmpeg output for debugging
+        lines_printed = 0
+        max_debug_lines = 20
 
         try:
             while self.ffmpeg_process and self.ffmpeg_process.poll() is None and self.running:
@@ -281,6 +306,13 @@ class RTSPCameraStreamer:
                 line = self.ffmpeg_process.stderr.readline()
                 if not line:
                     break
+
+                # Print initial FFmpeg output to help debug connection issues
+                if lines_printed < max_debug_lines:
+                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    if line_str:  # Skip empty lines
+                        print(f"[FFmpeg] {line_str}")
+                        lines_printed += 1
 
                 # Check for connection error patterns
                 for pattern in connection_error_patterns:
