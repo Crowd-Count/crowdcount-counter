@@ -312,9 +312,9 @@ class RTSPCameraStreamer:
                 # Create H.264 encoder with appropriate bitrate and keyframe interval
                 # For Pi Zero 2 W: 1.2 Mbps is optimal for 640x480@15fps (balanced quality/performance)
                 bitrate = 1200000
-                # idrperiod=15 means keyframe every 1 second at 15fps
+                # iperiod=15 means keyframe every 1 second at 15fps
                 # This allows faster recovery from packet loss (was default ~60 = 4 seconds)
-                encoder = H264Encoder(bitrate=bitrate, framerate=self.fps, idrperiod=15)
+                encoder = H264Encoder(bitrate=bitrate, framerate=self.fps, iperiod=15)
 
                 # Output directly to FFmpeg stdin
                 output = FileOutput(self.ffmpeg_process.stdin)
