@@ -49,7 +49,8 @@ echo "============================================================"
 sudo apt install -y \
     ffmpeg \
     python3-picamera2 \
-    python3-opencv
+    python3-opencv \
+    libcamera-apps
 
 echo "✓ Camera & video dependencies installed"
 

@@ -221,6 +221,7 @@ class RTSPCameraStreamer:
                 bitrate = 1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
                 ffmpeg_cmd = [
                     'ffmpeg',
+                    '-loglevel', 'verbose',  # More detailed logging for debugging
                     # Input options (must come before -i)
                     '-fflags', '+genpts',  # Generate PTS (input needs timestamps)
                     '-analyzeduration', '500000',  # 0.5s analysis (faster startup)
@@ -296,9 +297,9 @@ class RTSPCameraStreamer:
             b'failed to connect',   # Connection failure (more specific)
         ]
 
-        # Print first 20 lines of FFmpeg output for debugging
+        # Print first 50 lines of FFmpeg output for debugging
         lines_printed = 0
-        max_debug_lines = 20
+        max_debug_lines = 50
 
         try:
             while self.ffmpeg_process and self.ffmpeg_process.poll() is None and self.running:
