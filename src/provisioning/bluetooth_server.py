@@ -19,6 +19,14 @@ PASSWORD_UUID = 'e3e6515a-1db1-11ec-9621-0242ac130002'
 TAILSCALE_KEY_UUID = 'e3e65276-1db1-11ec-9621-0242ac130002'
 SERVER_IP_UUID = 'e3e65398-1db1-11ec-9621-0242ac130002'
 STREAM_NAME_UUID = 'e3e654ba-1db1-11ec-9621-0242ac130002'
+STATUS_UUID = 'e3e655dc-1db1-11ec-9621-0242ac130002'
+
+# Status codes for mobile app
+STATUS_PENDING = 0
+STATUS_AUTH_REQUIRED = 1
+STATUS_WIFI_CONNECTING = 2
+STATUS_WIFI_FAILED = 3
+STATUS_SUCCESS = 4
 
 # BlueZ D-Bus constants
 BLUEZ_SERVICE = 'org.bluez'
@@ -49,6 +57,28 @@ class ProvisioningData:
         # Server configuration
         self.server_ip = None
         self.stream_name = None
+
+        # Track if provisioning is in progress to prevent duplicate callbacks
+        self._provisioning_in_progress = False
+
+        # Status for mobile app feedback
+        self.status = STATUS_PENDING
+
+    def set_status(self, status):
+        """Update provisioning status"""
+        self.status = status
+
+    def reset(self):
+        """Reset data to allow new provisioning attempt"""
+        self.authenticated = False
+        self.wifi_ssid = None
+        self.wifi_password = None
+        self.tailscale_auth_key = None
+        self.server_ip = None
+        self.stream_name = None
+        self._provisioning_in_progress = False
+        self.status = STATUS_PENDING
+        print("🔄 Provisioning data reset - ready for new credentials")
 
     def set_auth_secret(self, secret):
         """Validate authentication secret"""
@@ -112,15 +142,22 @@ class ProvisioningData:
         if (self.authenticated and
             self.wifi_ssid and
             self.wifi_password and
-            self.server_ip):
+            self.server_ip and
+            not self._provisioning_in_progress):
 
+            self._provisioning_in_progress = True
             print("✓ All required provisioning data received!")
             if self.tailscale_auth_key:
                 print("   Tailscale key provided - will configure Tailscale")
             else:
                 print("   No Tailscale key - skipping Tailscale configuration")
-            # Trigger provisioning in a separate thread
-            threading.Thread(target=self.on_complete, args=(self,), daemon=True).start()
+            # Use GLib.idle_add for thread-safe callback from main loop
+            GLib.idle_add(self._trigger_complete)
+
+    def _trigger_complete(self):
+        """Called from GLib main loop - thread safe"""
+        self.on_complete(self)
+        return False  # Don't repeat
 
 
 class Characteristic(dbus.service.Object):
@@ -248,6 +285,20 @@ class StreamNameCharacteristic(Characteristic):
         self.provisioning_data.set_stream_name(name)
 
 
+class StatusCharacteristic(Characteristic):
+    """Status characteristic - mobile app can read current provisioning state"""
+
+    def __init__(self, bus, index, service, provisioning_data):
+        Characteristic.__init__(
+            self, bus, index, STATUS_UUID, ['read', 'notify'], service)
+        self.provisioning_data = provisioning_data
+
+    def ReadValue(self, options):
+        status = self.provisioning_data.status
+        print(f"  Status read: {status}")
+        return dbus.Array([dbus.Byte(status)], signature='y')
+
+
 class ProvisioningService(dbus.service.Object):
     """Main GATT service for provisioning"""
 
@@ -268,6 +319,7 @@ class ProvisioningService(dbus.service.Object):
         self.add_characteristic(TailscaleKeyCharacteristic(bus, 3, self, provisioning_data))
         self.add_characteristic(ServerIPCharacteristic(bus, 4, self, provisioning_data))
         self.add_characteristic(StreamNameCharacteristic(bus, 5, self, provisioning_data))
+        self.add_characteristic(StatusCharacteristic(bus, 6, self, provisioning_data))
 
     def add_characteristic(self, characteristic):
         self.characteristics.append(characteristic)

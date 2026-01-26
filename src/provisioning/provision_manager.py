@@ -11,7 +11,12 @@ import signal
 from pathlib import Path
 
 from device_identity import DeviceIdentity
-from bluetooth_server import BluetoothProvisioningServer
+from bluetooth_server import (
+    BluetoothProvisioningServer,
+    STATUS_WIFI_CONNECTING,
+    STATUS_WIFI_FAILED,
+    STATUS_SUCCESS,
+)
 from network_setup import NetworkSetup
 
 
@@ -70,6 +75,16 @@ class ProvisioningManager:
         except Exception:
             return False
 
+    def _reset_provisioning_data(self):
+        """Reset provisioning data to allow new credentials"""
+        if self.bluetooth_server and self.bluetooth_server.provisioning_data:
+            self.bluetooth_server.provisioning_data.reset()
+
+    def _set_status(self, status):
+        """Update provisioning status for mobile app feedback"""
+        if self.bluetooth_server and self.bluetooth_server.provisioning_data:
+            self.bluetooth_server.provisioning_data.set_status(status)
+
     def on_provisioning_complete(self, data):
         """Callback when all provisioning data is received"""
         print("\n" + "="*60)
@@ -81,12 +96,27 @@ class ProvisioningManager:
         print("="*60)
         print()
 
-        # Step 1: Configure WiFi
+        # Step 1: Configure WiFi with retries
         print("Step 1/4: Configuring WiFi...")
-        if not self.network_setup.configure_wifi(data.wifi_ssid, data.wifi_password):
-            print("✗ WiFi configuration failed!")
-            print("   Please check credentials and try again.")
-            self.bluetooth_server.stop()
+        self._set_status(STATUS_WIFI_CONNECTING)
+        max_wifi_attempts = 3
+        wifi_success = False
+
+        for attempt in range(1, max_wifi_attempts + 1):
+            print(f"  WiFi connection attempt {attempt}/{max_wifi_attempts}...")
+            if self.network_setup.configure_wifi(data.wifi_ssid, data.wifi_password):
+                wifi_success = True
+                break
+            if attempt < max_wifi_attempts:
+                print(f"  Retrying in 5 seconds...")
+                time.sleep(5)
+
+        if not wifi_success:
+            print("✗ WiFi configuration failed after all attempts!")
+            print("   Please verify credentials and try again via Bluetooth.")
+            self._set_status(STATUS_WIFI_FAILED)
+            # DON'T stop BLE - allow user to send new credentials
+            self._reset_provisioning_data()
             return
 
         # Step 2: Configure Tailscale
@@ -94,8 +124,9 @@ class ProvisioningManager:
         stream_name = data.stream_name or self.device_identity.device_id
         if not self.network_setup.configure_tailscale(data.tailscale_auth_key, stream_name):
             print("✗ Tailscale configuration failed!")
-            print("   Please check auth key and try again.")
-            self.bluetooth_server.stop()
+            print("   Please check auth key and try again via Bluetooth.")
+            # DON'T stop BLE - allow user to send new credentials
+            self._reset_provisioning_data()
             return
 
         # Step 3: Write device configuration
@@ -108,7 +139,9 @@ class ProvisioningManager:
             )
         except Exception as e:
             print(f"✗ Failed to write config: {e}")
-            self.bluetooth_server.stop()
+            print("   Please try again via Bluetooth.")
+            # DON'T stop BLE - allow user to send new credentials
+            self._reset_provisioning_data()
             return
 
         # Step 4: Register with server
@@ -117,6 +150,7 @@ class ProvisioningManager:
 
         # Mark as provisioned
         self.mark_provisioned()
+        self._set_status(STATUS_SUCCESS)
 
         print("\n" + "="*60)
         print("✓ PROVISIONING COMPLETE!")
@@ -146,17 +180,23 @@ class ProvisioningManager:
 
         # Check if already provisioned
         if self.is_provisioned():
-            print("✓ Device already provisioned!")
-            print()
-            print("To re-provision:")
-            print("  1. Run: sudo rm /boot/firmware/provisioned")
-            print("  2. Reboot the device")
-            print()
-            # Return True since device is ready (already provisioned)
-            return True
+            if self.is_wifi_connected():
+                print("✓ Device already provisioned and WiFi connected!")
+                print()
+                print("To re-provision:")
+                print("  1. Run: sudo rm /boot/firmware/provisioned")
+                print("  2. Reboot the device")
+                print()
+                # Return True since device is ready (already provisioned)
+                return True
+            else:
+                print("⚠ Device provisioned but WiFi not connected")
+                print("  Starting Bluetooth for re-provisioning...")
+                print()
+                # Fall through to start BLE server
 
-        # Check WiFi status
-        if self.is_wifi_connected():
+        # Check WiFi status (for non-provisioned devices)
+        elif self.is_wifi_connected():
             print("✓ WiFi already connected")
             print("  Skipping Bluetooth provisioning")
             print()
