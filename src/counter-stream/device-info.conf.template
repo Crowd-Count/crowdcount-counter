@@ -19,7 +19,7 @@ RTSP_PORT=8554
 # Video settings (same for all devices)
 WIDTH=640
 HEIGHT=480
-FPS=30
+FPS=15
 
 # CrowdCount API URL for device status updates
 API_URL=https://api.crowdcount.tech
