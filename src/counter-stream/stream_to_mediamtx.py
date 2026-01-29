@@ -390,6 +390,11 @@ class RTSPCameraStreamer:
                             for failure in critical_failures:
                                 print(f"  ✗ {failure}")
 
+                            # If API reports device offline, immediately restart pipeline
+                            if any("API reports device offline" in f for f in critical_failures):
+                                print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                break
+
                             # If too many consecutive failures, break and restart
                             if self.consecutive_health_failures >= self.max_health_failures:
                                 print(f"\n✗ Too many consecutive health failures - restarting stream...")
@@ -451,6 +456,11 @@ class RTSPCameraStreamer:
                                 print(f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})")
                                 for failure in critical_failures:
                                     print(f"  ✗ {failure}")
+
+                                # If API reports device offline, immediately restart pipeline
+                                if any("API reports device offline" in f for f in critical_failures):
+                                    print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                    break
 
                                 if self.consecutive_health_failures >= self.max_health_failures:
                                     print(f"\n✗ Too many consecutive health failures - restarting stream...")
@@ -570,20 +580,17 @@ class RTSPCameraStreamer:
     def check_api_device_status(self):
         """Check our device status from the CrowdCount API (read-only)
 
+        Queries /connection_status to see if the server considers us online.
         If the API thinks we're offline but we think we're streaming,
-        something is wrong and we should restart.
+        something is wrong and we should restart the pipeline.
         """
-        if not self.password:
-            return True, "No credentials - skipping API check"
-
         try:
             import requests
 
-            # Check device status from API
-            status_url = f"{self.api_url}/get_device_status"
+            # Check device status via /connection_status endpoint
+            status_url = f"{self.api_url}/connection_status"
             payload = {
-                'device_id': self.device_id,
-                'password': self.password
+                'device_id': self.device_id
             }
 
             response = requests.post(status_url, json=payload, timeout=5)
@@ -595,8 +602,8 @@ class RTSPCameraStreamer:
                     return False, "API reports device offline"
                 return True, f"API status: {status}"
             elif response.status_code == 404:
-                # Endpoint might not exist, skip check
-                return True, "API check not available"
+                # Device not found on server
+                return True, "Device not found on API (skipping check)"
             else:
                 return True, f"API returned {response.status_code}"
         except Exception as e:
@@ -639,7 +646,14 @@ class RTSPCameraStreamer:
         if not ok:
             critical_failures.append(f"MediaMTX: {msg}")
 
-        # Check 3: FFmpeg process alive (implicit - checked in main loop)
+        # Check 3: API device status (CRITICAL - if server thinks we're offline, restart pipeline)
+        # This catches cases where the orchestrator marked us offline but we think we're still streaming
+        ok, msg = self.check_api_device_status()
+        results['api_status'] = (ok, msg)
+        if not ok:
+            critical_failures.append(f"API Status: {msg}")
+
+        # Check 4: FFmpeg process alive (implicit - checked in main loop)
 
         # Determine overall health
         all_passed = len(critical_failures) == 0
