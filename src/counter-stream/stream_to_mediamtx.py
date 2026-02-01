@@ -335,6 +335,7 @@ class RTSPCameraStreamer:
         # the first check happens after initial_health_check_delay seconds
         self.last_health_check = start_time + self.initial_health_check_delay - self.health_check_interval
         self.consecutive_health_failures = 0  # Reset failures on new stream
+        self.stream_start_time = start_time  # Track when stream started for API check grace period
 
         try:
             if not self.use_legacy_camera:
@@ -583,7 +584,19 @@ class RTSPCameraStreamer:
         Queries /connection_status to see if the server considers us online.
         If the API thinks we're offline but we think we're streaming,
         something is wrong and we should restart the pipeline.
+
+        Skips the check for the first 90 seconds after stream start to give the
+        orchestrator time to detect the stream and update the API status.
         """
+        # Grace period: skip API offline check for first 90s after stream starts
+        # The orchestrator needs time to detect the stream (~15s health check interval)
+        # and call update_status('online') on the API
+        api_check_grace_period = 90  # seconds
+        if hasattr(self, 'stream_start_time') and (time.time() - self.stream_start_time) < api_check_grace_period:
+            elapsed = time.time() - self.stream_start_time
+            print(f"[Health] Skipping API status check (grace period: {elapsed:.0f}s / {api_check_grace_period}s)")
+            return True, f"API check skipped (grace period: {elapsed:.0f}s / {api_check_grace_period}s)"
+
         try:
             import requests
 
@@ -593,21 +606,26 @@ class RTSPCameraStreamer:
                 'device_id': self.device_id
             }
 
+            print(f"[Health] Checking API device status: {status_url} (device_id={self.device_id})")
             response = requests.post(status_url, json=payload, timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
                 status = data.get('status', 'unknown')
+                print(f"[Health] API reports device status: {status}")
                 if status == 'offline':
                     return False, "API reports device offline"
                 return True, f"API status: {status}"
             elif response.status_code == 404:
                 # Device not found on server
+                print(f"[Health] API returned 404 - device not found")
                 return True, "Device not found on API (skipping check)"
             else:
+                print(f"[Health] API returned unexpected status code: {response.status_code}")
                 return True, f"API returned {response.status_code}"
         except Exception as e:
-            # API errors shouldn't break streaming
+            # API errors shouldn't break streaming - but log them so we can debug
+            print(f"[Health] API check failed with exception: {e}")
             return True, f"API check skipped: {e}"
 
     def check_network_connectivity(self):
