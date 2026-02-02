@@ -417,8 +417,8 @@ class RTSPCameraStreamer:
 
                     time.sleep(1)
 
-                # Stop encoder
-                self.picam2.stop_encoder()
+                # Don't call stop_encoder() here - cleanup() handles it
+                # after killing FFmpeg first (to avoid hanging on broken pipe)
 
             else:
                 # Legacy camera: Capture frames manually and encode with MJPEG
@@ -932,30 +932,9 @@ class RTSPCameraStreamer:
         print("\nCleaning up...")
         self.running = False
 
-        # Close camera FIRST (stop feeding data to FFmpeg)
-        if self.picam2:
-            try:
-                # Stop encoder if it's running
-                try:
-                    self.picam2.stop_encoder()
-                except Exception:
-                    pass
-                self.picam2.stop()
-                self.picam2.close()
-                print("✓ Closed picamera2")
-            except Exception:
-                pass
-            self.picam2 = None
-
-        if self.cap:
-            try:
-                self.cap.release()
-                print("✓ Closed legacy camera")
-            except Exception:
-                pass
-            self.cap = None
-
-        # Close ffmpeg - be aggressive to prevent hung processes
+        # Kill FFmpeg FIRST - the encoder writes to FFmpeg's stdin pipe,
+        # so if FFmpeg is dead/hung, stop_encoder() will block forever.
+        # Closing FFmpeg's stdin unblocks the encoder.
         if self.ffmpeg_process:
             try:
                 # First try graceful shutdown
@@ -990,6 +969,28 @@ class RTSPCameraStreamer:
                 except Exception:
                     print(f"⚠ Could not kill FFmpeg: {e}")
             self.ffmpeg_process = None
+
+        # Now stop camera/encoder (safe to do after FFmpeg pipe is closed)
+        if self.picam2:
+            try:
+                try:
+                    self.picam2.stop_encoder()
+                except Exception:
+                    pass
+                self.picam2.stop()
+                self.picam2.close()
+                print("✓ Closed picamera2")
+            except Exception:
+                pass
+            self.picam2 = None
+
+        if self.cap:
+            try:
+                self.cap.release()
+                print("✓ Closed legacy camera")
+            except Exception:
+                pass
+            self.cap = None
 
         print("✓ Cleanup completed\n")
 
