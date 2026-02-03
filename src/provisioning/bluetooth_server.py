@@ -28,6 +28,9 @@ STATUS_WIFI_CONNECTING = 2
 STATUS_WIFI_FAILED = 3
 STATUS_SUCCESS = 4
 
+# Default server IP (Tailscale IP of MediaMTX server)
+DEFAULT_SERVER_IP = '100.72.64.80'
+
 # BlueZ D-Bus constants
 BLUEZ_SERVICE = 'org.bluez'
 GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
@@ -118,12 +121,16 @@ class ProvisioningData:
         self._check_complete()
 
     def set_server_ip(self, ip):
-        """Set server IP"""
+        """Set server IP, falling back to default if empty"""
         if not self.authenticated:
             print("✗ Not authenticated - ignoring server IP")
             return
-        self.server_ip = ip
-        print(f"  Received server IP: {ip}")
+        if ip and ip.strip():
+            self.server_ip = ip.strip()
+            print(f"  Received server IP: {self.server_ip}")
+        else:
+            self.server_ip = DEFAULT_SERVER_IP
+            print(f"  No server IP provided, using default: {self.server_ip}")
         self._check_complete()
 
     def set_stream_name(self, name):

@@ -87,6 +87,17 @@ class ProvisioningManager:
 
     def on_provisioning_complete(self, data):
         """Callback when all provisioning data is received"""
+        try:
+            self._do_provisioning(data)
+        except Exception as e:
+            print(f"\n✗ Unexpected error during provisioning: {e}")
+            import traceback
+            traceback.print_exc()
+            self._set_status(STATUS_WIFI_FAILED)
+            self._reset_provisioning_data()
+
+    def _do_provisioning(self, data):
+        """Execute the provisioning steps. Called by on_provisioning_complete."""
         print("\n" + "="*60)
         print("📦 PROVISIONING DATA RECEIVED")
         print("="*60)
@@ -99,7 +110,7 @@ class ProvisioningManager:
         # Step 1: Configure WiFi with retries
         print("Step 1/4: Configuring WiFi...")
         self._set_status(STATUS_WIFI_CONNECTING)
-        max_wifi_attempts = 3
+        max_wifi_attempts = 5
         wifi_success = False
 
         for attempt in range(1, max_wifi_attempts + 1):
@@ -108,8 +119,8 @@ class ProvisioningManager:
                 wifi_success = True
                 break
             if attempt < max_wifi_attempts:
-                print(f"  Retrying in 5 seconds...")
-                time.sleep(5)
+                print(f"  Retrying in 10 seconds...")
+                time.sleep(10)
 
         if not wifi_success:
             print("✗ WiFi configuration failed after all attempts!")
@@ -119,15 +130,18 @@ class ProvisioningManager:
             self._reset_provisioning_data()
             return
 
-        # Step 2: Configure Tailscale
-        print("\nStep 2/4: Joining Tailscale network...")
+        # Step 2: Configure Tailscale (only if a key was provided)
         stream_name = data.stream_name or self.device_identity.device_id
-        if not self.network_setup.configure_tailscale(data.tailscale_auth_key, stream_name):
-            print("✗ Tailscale configuration failed!")
-            print("   Please check auth key and try again via Bluetooth.")
-            # DON'T stop BLE - allow user to send new credentials
-            self._reset_provisioning_data()
-            return
+        if data.tailscale_auth_key and data.tailscale_auth_key.strip():
+            print("\nStep 2/4: Joining Tailscale network...")
+            if not self.network_setup.configure_tailscale(data.tailscale_auth_key, stream_name):
+                print("✗ Tailscale configuration failed!")
+                print("   Please check auth key and try again via Bluetooth.")
+                # DON'T stop BLE - allow user to send new credentials
+                self._reset_provisioning_data()
+                return
+        else:
+            print("\nStep 2/4: Skipping Tailscale (pre-configured on device)")
 
         # Step 3: Write device configuration
         print("\nStep 3/4: Writing device configuration...")

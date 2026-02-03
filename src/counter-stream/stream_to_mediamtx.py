@@ -336,6 +336,7 @@ class RTSPCameraStreamer:
         self.last_health_check = start_time + self.initial_health_check_delay - self.health_check_interval
         self.consecutive_health_failures = 0  # Reset failures on new stream
         self.stream_start_time = start_time  # Track when stream started for API check grace period
+        self.stream_was_healthy = False  # Track if stream was ever confirmed healthy
 
         try:
             if not self.use_legacy_camera:
@@ -391,16 +392,24 @@ class RTSPCameraStreamer:
                             for failure in critical_failures:
                                 print(f"  ✗ {failure}")
 
-                            # If API reports device offline, immediately restart pipeline
+                            # If API reports device offline AND stream was previously working,
+                            # immediately restart. If stream was never healthy, let the normal
+                            # failure count handle it (immediate restart would just loop).
                             if any("API reports device offline" in f for f in critical_failures):
-                                print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
-                                break
+                                if self.stream_was_healthy:
+                                    print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                    break
+                                else:
+                                    print(f"  (stream was never healthy - waiting for normal failure threshold)")
 
                             # If too many consecutive failures, break and restart
                             if self.consecutive_health_failures >= self.max_health_failures:
                                 print(f"\n✗ Too many consecutive health failures - restarting stream...")
                                 break
                         else:
+                            if not self.stream_was_healthy:
+                                print(f"\n✓ Stream confirmed healthy")
+                                self.stream_was_healthy = True
                             if self.consecutive_health_failures > 0:
                                 print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
                                 for name, (ok, msg) in results.items():
@@ -458,15 +467,23 @@ class RTSPCameraStreamer:
                                 for failure in critical_failures:
                                     print(f"  ✗ {failure}")
 
-                                # If API reports device offline, immediately restart pipeline
+                                # If API reports device offline AND stream was previously working,
+                                # immediately restart. If stream was never healthy, let the normal
+                                # failure count handle it (immediate restart would just loop).
                                 if any("API reports device offline" in f for f in critical_failures):
-                                    print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
-                                    break
+                                    if self.stream_was_healthy:
+                                        print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                        break
+                                    else:
+                                        print(f"  (stream was never healthy - waiting for normal failure threshold)")
 
                                 if self.consecutive_health_failures >= self.max_health_failures:
                                     print(f"\n✗ Too many consecutive health failures - restarting stream...")
                                     break
                             else:
+                                if not self.stream_was_healthy:
+                                    print(f"\n✓ Stream confirmed healthy")
+                                    self.stream_was_healthy = True
                                 if self.consecutive_health_failures > 0:
                                     print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
                                 self.consecutive_health_failures = 0

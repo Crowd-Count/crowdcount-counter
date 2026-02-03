@@ -145,7 +145,38 @@ class NetworkSetup:
             time.sleep(2)
             subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'],
                          check=True, capture_output=True)
-            time.sleep(3)
+
+            # Wait for WiFi radio to come up and scan for networks
+            # Pi Zero 2W can be slow to scan - wait until we see the target SSID
+            print(f"  Waiting for WiFi scan to find '{ssid}'...")
+            scan_timeout = 15  # seconds
+            scan_start = time.time()
+            network_found = False
+            while time.time() - scan_start < scan_timeout:
+                try:
+                    scan_result = subprocess.run(
+                        ['sudo', 'nmcli', '-t', '-f', 'SSID', 'dev', 'wifi', 'list'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if ssid in scan_result.stdout:
+                        network_found = True
+                        print(f"  ✓ Network '{ssid}' found after {time.time() - scan_start:.0f}s")
+                        break
+                except Exception:
+                    pass
+                time.sleep(2)
+
+            if not network_found:
+                # Force a rescan and try once more
+                print(f"  Network not found in scan, forcing rescan...")
+                subprocess.run(['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
+                             capture_output=True, timeout=5)
+                time.sleep(5)
+
+            # Delete any existing connection profiles for this SSID to avoid
+            # duplicates (MyNetwork, MyNetwork-1, MyNetwork-2, etc.)
+            subprocess.run(['sudo', 'nmcli', 'connection', 'delete', ssid],
+                         capture_output=True, timeout=10)  # Ignore errors if none exist
 
             # Connect to network
             result = subprocess.run(
@@ -157,10 +188,28 @@ class NetworkSetup:
             )
 
             if result.returncode == 0:
-                print(f"✓ Connected to WiFi: {ssid}")
-                self.wifi_connected = True
+                # Verify we actually have connectivity (IP address assigned)
+                print(f"  nmcli reports connected, verifying connectivity...")
+                verify_timeout = 15  # seconds
+                verify_start = time.time()
+                while time.time() - verify_start < verify_timeout:
+                    try:
+                        ip_result = subprocess.run(
+                            ['ip', '-4', 'addr', 'show', 'wlan0'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if 'inet ' in ip_result.stdout:
+                            print(f"✓ Connected to WiFi: {ssid} (IP assigned)")
+                            self.wifi_connected = True
+                            self._save_wifi_config(ssid, password)
+                            return True
+                    except Exception:
+                        pass
+                    time.sleep(2)
 
-                # Save WiFi config for persistence
+                # nmcli said success but no IP - might still be connecting
+                print(f"⚠ Connected but no IP yet, assuming success")
+                self.wifi_connected = True
                 self._save_wifi_config(ssid, password)
                 return True
             else:
