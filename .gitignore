@@ -4,6 +4,7 @@ src/counter-stream/device-info.conf
 # Log files
 *.log
 logs/
+manufacturing/qr_codes/
 
 # Python cache
 __pycache__/

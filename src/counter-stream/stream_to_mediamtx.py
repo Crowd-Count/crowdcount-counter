@@ -949,42 +949,46 @@ class RTSPCameraStreamer:
         print("\nCleaning up...")
         self.running = False
 
-        # Kill FFmpeg FIRST - the encoder writes to FFmpeg's stdin pipe,
-        # so if FFmpeg is dead/hung, stop_encoder() will block forever.
-        # Closing FFmpeg's stdin unblocks the encoder.
+        # Kill FFmpeg FIRST and IMMEDIATELY - don't try graceful shutdown.
+        # When the server is down, ffmpeg gets stuck and stdin.close() blocks
+        # because the pipe buffer is full. Just kill it.
         if self.ffmpeg_process:
+            pid = self.ffmpeg_process.pid
             try:
-                # First try graceful shutdown
+                # Send SIGKILL immediately - no graceful shutdown attempts
+                # that can block when ffmpeg is stuck on network I/O
+                print(f"Killing FFmpeg (PID {pid})...")
+                self.ffmpeg_process.kill()
+
+                # Wait briefly for it to die
                 try:
-                    self.ffmpeg_process.stdin.close()
+                    self.ffmpeg_process.wait(timeout=3)
+                    print("✓ FFmpeg killed")
+                except subprocess.TimeoutExpired:
+                    # Still alive? Try os.kill as backup
+                    print("⚠ FFmpeg didn't die, trying os.kill...")
+                    try:
+                        import os
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.5)
+                        print("✓ FFmpeg force killed")
+                    except Exception:
+                        print(f"⚠ Could not kill FFmpeg PID {pid}")
+            except Exception as e:
+                print(f"⚠ Error killing FFmpeg: {e}")
+                # Last resort
+                try:
+                    import os
+                    os.kill(pid, signal.SIGKILL)
+                    print(f"✓ Force killed FFmpeg (PID {pid})")
                 except Exception:
                     pass
 
-                # Give it 2 seconds to exit gracefully
-                try:
-                    self.ffmpeg_process.wait(timeout=2)
-                    print("✓ FFmpeg exited gracefully")
-                except subprocess.TimeoutExpired:
-                    # Process didn't exit - terminate it
-                    print("⚠ FFmpeg didn't exit, sending SIGTERM...")
-                    self.ffmpeg_process.terminate()
-                    try:
-                        self.ffmpeg_process.wait(timeout=2)
-                        print("✓ FFmpeg terminated")
-                    except subprocess.TimeoutExpired:
-                        # Still didn't exit - force kill
-                        print("⚠ FFmpeg didn't terminate, sending SIGKILL...")
-                        self.ffmpeg_process.kill()
-                        self.ffmpeg_process.wait(timeout=1)
-                        print("✓ FFmpeg killed")
-            except Exception as e:
-                # Last resort - try to kill by PID
-                try:
-                    import os
-                    os.kill(self.ffmpeg_process.pid, signal.SIGKILL)
-                    print(f"✓ Force killed FFmpeg (PID {self.ffmpeg_process.pid})")
-                except Exception:
-                    print(f"⚠ Could not kill FFmpeg: {e}")
+            # Now safe to close stdin (process is dead)
+            try:
+                self.ffmpeg_process.stdin.close()
+            except Exception:
+                pass
             self.ffmpeg_process = None
 
         # Now stop camera/encoder (safe to do after FFmpeg pipe is closed)
