@@ -43,15 +43,34 @@ def load_identity() -> tuple:
 
     Returns (device_id, api_password) or raises RuntimeError.
     """
+    device_id = None
+    password = None
+
     for path in IDENTITY_PATHS:
         if path.exists():
+            # Try configparser first
             config = configparser.ConfigParser()
             config.read(path)
             section = config["DEFAULT"] if "DEFAULT" in config else config[config.sections()[0]]
-            device_id = section.get("DEVICE_ID")
-            password = section.get("API_PASSWORD")
+            device_id = section.get("DEVICE_ID") or None
+            password = section.get("API_PASSWORD") or None
+
+            # Fallback: read API_PASSWORD with raw line parsing
+            if device_id and not password:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("API_PASSWORD="):
+                            val = line.split("=", 1)[1].strip()
+                            if val:
+                                password = val
+                                break
+
             if device_id and password:
                 return device_id, password
+
+    if device_id and not password:
+        raise RuntimeError(f"Device {device_id} found but API_PASSWORD is empty in device-identity.conf")
     raise RuntimeError("Could not load device identity from any known path")
 
 

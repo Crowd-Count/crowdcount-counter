@@ -57,7 +57,7 @@ class CrowdCountMain:
 
     def _load_config(self):
         """Load device identity and configuration"""
-        # Load device identity (for DEVICE_ID)
+        # Load device identity (for DEVICE_ID and API_PASSWORD)
         for identity_path in IDENTITY_PATHS:
             if identity_path.exists():
                 try:
@@ -65,12 +65,31 @@ class CrowdCountMain:
                     config.read(identity_path)
                     section = config['DEFAULT'] if 'DEFAULT' in config else config[config.sections()[0]]
                     self.device_id = section.get('DEVICE_ID', None)
-                    self.api_password = section.get('API_PASSWORD', None)
+                    # Also read API password for version reporting
+                    self.api_password = section.get('API_PASSWORD', None) or None
                     if self.device_id:
                         print(f"✓ Loaded device identity: {self.device_id} from {identity_path}")
                         break
                 except Exception as e:
                     print(f"⚠ Error reading {identity_path}: {e}")
+
+        # Fallback: read API_PASSWORD directly from identity file if configparser missed it
+        if self.device_id and not self.api_password:
+            for identity_path in IDENTITY_PATHS:
+                if identity_path.exists():
+                    try:
+                        with open(identity_path) as f:
+                            for line in f:
+                                line = line.strip()
+                                if line.startswith('API_PASSWORD='):
+                                    val = line.split('=', 1)[1].strip()
+                                    if val:
+                                        self.api_password = val
+                                        break
+                        if self.api_password:
+                            break
+                    except Exception:
+                        pass
 
         # Load device config (for Tailscale auth key)
         if DEVICE_CONFIG.exists():
@@ -121,10 +140,15 @@ class CrowdCountMain:
 
     def report_version(self):
         """Report the current git commit hash to the API server."""
-        if not self.device_id or not self.api_password:
+        if not self.device_id:
+            print("⚠ Skipping version report: no device_id")
+            return
+        if not self.api_password:
+            print("⚠ Skipping version report: no API_PASSWORD in device-identity.conf")
             return
         commit = self._get_current_commit()
         if not commit:
+            print("⚠ Skipping version report: could not get git commit hash")
             return
         try:
             import requests
