@@ -10,6 +10,7 @@ import hashlib
 import hmac as hmac_mod
 import json
 import logging
+import os
 import subprocess
 import time
 import uuid
@@ -95,14 +96,18 @@ def sign_request(device_id: str, password: str, method: str, url: str, body: str
 
 
 def get_current_commit() -> str:
-    """Return the current HEAD commit hash."""
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+    """Return the current HEAD commit hash by reading .git directly."""
+    try:
+        git_dir = REPO_DIR / ".git"
+        head_file = git_dir / "HEAD"
+        head = head_file.read_text().strip()
+        if head.startswith("ref: "):
+            ref_path = git_dir / head[5:]
+            return ref_path.read_text().strip()
+        return head
+    except Exception as e:
+        logger.error("Could not read git commit: %s", e)
+        return ""
 
 
 def report_version(device_id: str, password: str, commit_hash: str) -> None:

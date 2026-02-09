@@ -126,16 +126,19 @@ class CrowdCountMain:
         }
 
     def _get_current_commit(self):
-        """Return the current HEAD commit hash."""
+        """Return the current HEAD commit hash by reading .git directly."""
         try:
-            result = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
-                cwd=SCRIPT_DIR,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip() if result.returncode == 0 else None
-        except Exception:
+            git_dir = SCRIPT_DIR / '.git'
+            head_file = git_dir / 'HEAD'
+            head = head_file.read_text().strip()
+            if head.startswith('ref: '):
+                # HEAD is a symbolic ref like "ref: refs/heads/main"
+                ref_path = git_dir / head[5:]
+                return ref_path.read_text().strip()
+            # Detached HEAD — already a commit hash
+            return head
+        except Exception as e:
+            print(f"⚠ Could not read git commit: {e}")
             return None
 
     def report_version(self):
