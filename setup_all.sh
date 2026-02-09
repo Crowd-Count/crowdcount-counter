@@ -301,6 +301,22 @@ else
     echo "   You'll need to manually install the service later."
 fi
 
+# Install updater service
+echo ""
+echo "============================================================"
+echo "Installing CrowdCount Updater Service..."
+echo "============================================================"
+echo ""
+echo "This will install the auto-updater to check for git updates."
+echo ""
+
+if [ -f "$SCRIPT_DIR/install_updater_service.sh" ]; then
+    sudo "$SCRIPT_DIR/install_updater_service.sh"
+else
+    echo "⚠ Warning: install_updater_service.sh not found"
+    echo "   You'll need to manually install the updater service later."
+fi
+
 # Installation complete
 echo ""
 echo "============================================================"
@@ -312,6 +328,7 @@ echo ""
 echo "  ✓ Tailscale - VPN connectivity"
 echo "  ✓ Bluetooth - For WiFi provisioning"
 echo "  ✓ CrowdCount Main Service - Provisioning + Streaming"
+echo "  ✓ CrowdCount Updater Service - Auto git pull + version reporting"
 echo ""
 echo "============================================================"
 echo "NEXT STEPS (Manual Setup):"

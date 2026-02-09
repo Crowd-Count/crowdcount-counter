@@ -11,6 +11,9 @@ import sys
 import argparse
 import signal
 import threading
+import hashlib
+import hmac as hmac_mod
+import uuid
 
 try:
     from picamera2 import Picamera2
@@ -93,6 +96,26 @@ class RTSPCameraStreamer:
             self.mediamtx_api_port = 9998  # Dev server
         else:
             self.mediamtx_api_port = 9997  # Prod server (default)
+
+    def _sign_request(self, method, url, body):
+        """Compute HMAC-SHA256 signature headers for API requests."""
+        if not self.password:
+            return {}
+        from urllib.parse import urlparse
+        signing_key = hashlib.sha256(f"{self.device_id}:{self.password}".encode()).digest()
+        path = urlparse(url).path
+        timestamp = str(int(time.time()))
+        nonce = str(uuid.uuid4())
+        body_hash = hashlib.sha256(body.encode()).hexdigest()
+        string_to_sign = f"{method}\n{path}\n{body_hash}\n{timestamp}\n{nonce}"
+        signature = hmac_mod.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        return {
+            'X-CC-Signature': signature,
+            'X-CC-Timestamp': timestamp,
+            'X-CC-Nonce': nonce,
+            'X-CC-Device-Id': self.device_id,
+            'X-CC-Sig-Version': '1',
+        }
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -623,8 +646,12 @@ class RTSPCameraStreamer:
                 'device_id': self.device_id
             }
 
+            import json
+            body_str = json.dumps(payload)
+            sig_headers = self._sign_request('POST', status_url, body_str)
+
             print(f"[Health] Checking API device status: {status_url} (device_id={self.device_id})")
-            response = requests.post(status_url, json=payload, timeout=5)
+            response = requests.post(status_url, json=payload, headers=sig_headers, timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
@@ -714,8 +741,12 @@ class RTSPCameraStreamer:
                 'password': self.password
             }
 
+            import json
+            body_str = json.dumps(payload)
+            sig_headers = self._sign_request('POST', api_endpoint, body_str)
+
             print(f"Fetching streaming server IP from API...")
-            response = requests.post(api_endpoint, json=payload, timeout=10)
+            response = requests.post(api_endpoint, json=payload, headers=sig_headers, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
