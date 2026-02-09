@@ -311,6 +311,7 @@ echo "This will install the auto-updater to check for git updates."
 echo ""
 
 if [ -f "$SCRIPT_DIR/install_updater_service.sh" ]; then
+    sudo chmod +x "$SCRIPT_DIR/install_updater_service.sh"
     sudo "$SCRIPT_DIR/install_updater_service.sh"
 else
     echo "⚠ Warning: install_updater_service.sh not found"
