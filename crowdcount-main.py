@@ -10,7 +10,11 @@ import time
 import subprocess
 import signal
 import configparser
+import hashlib
+import hmac as hmac_mod
+import json
 import logging
+import uuid
 from pathlib import Path
 
 # Add src directory to path for imports
@@ -47,6 +51,7 @@ class CrowdCountMain:
         self.running = True
         self.current_process = None
         self.device_id = None
+        self.api_password = None
         self.tailscale_auth_key = None
         self._load_config()
 
@@ -60,6 +65,7 @@ class CrowdCountMain:
                     config.read(identity_path)
                     section = config['DEFAULT'] if 'DEFAULT' in config else config[config.sections()[0]]
                     self.device_id = section.get('DEVICE_ID', None)
+                    self.api_password = section.get('API_PASSWORD', None)
                     if self.device_id:
                         print(f"✓ Loaded device identity: {self.device_id} from {identity_path}")
                         break
@@ -79,6 +85,64 @@ class CrowdCountMain:
                             break
             except Exception as e:
                 print(f"⚠ Error reading device config: {e}")
+
+    def _sign_request(self, method, url, body):
+        """Compute HMAC-SHA256 signature headers for API requests."""
+        if not self.api_password or not self.device_id:
+            return {}
+        from urllib.parse import urlparse
+        signing_key = hashlib.sha256(f"{self.device_id}:{self.api_password}".encode()).digest()
+        path = urlparse(url).path
+        timestamp = str(int(time.time()))
+        nonce = str(uuid.uuid4())
+        body_hash = hashlib.sha256(body.encode()).hexdigest()
+        string_to_sign = f"{method}\n{path}\n{body_hash}\n{timestamp}\n{nonce}"
+        signature = hmac_mod.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        return {
+            'X-CC-Signature': signature,
+            'X-CC-Timestamp': timestamp,
+            'X-CC-Nonce': nonce,
+            'X-CC-Device-Id': self.device_id,
+            'X-CC-Sig-Version': '1',
+        }
+
+    def _get_current_commit(self):
+        """Return the current HEAD commit hash."""
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=SCRIPT_DIR,
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception:
+            return None
+
+    def report_version(self):
+        """Report the current git commit hash to the API server."""
+        if not self.device_id or not self.api_password:
+            return
+        commit = self._get_current_commit()
+        if not commit:
+            return
+        try:
+            import requests
+            url = "https://api.crowdcount.tech/report_version"
+            payload = json.dumps({
+                "device_id": self.device_id,
+                "password": self.api_password,
+                "commit_hash": commit,
+            })
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._sign_request("POST", url, payload))
+            resp = requests.post(url, data=payload, headers=headers, timeout=30)
+            if resp.ok:
+                print(f"✓ Reported version {commit[:8]} to server")
+            else:
+                print(f"⚠ Version report failed ({resp.status_code})")
+        except Exception as e:
+            print(f"⚠ Could not report version: {e}")
 
     def authenticate_tailscale(self):
         """Authenticate Tailscale with auth key and device hostname"""
@@ -457,6 +521,10 @@ class CrowdCountMain:
         # Authenticate Tailscale on startup (if not already authenticated)
         print("Checking Tailscale authentication...")
         self.authenticate_tailscale()
+        print()
+
+        # Report current version to API server
+        self.report_version()
         print()
 
         # Main decision loop
