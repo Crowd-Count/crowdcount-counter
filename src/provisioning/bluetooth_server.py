@@ -20,6 +20,7 @@ TAILSCALE_KEY_UUID = 'e3e65276-1db1-11ec-9621-0242ac130002'
 SERVER_IP_UUID = 'e3e65398-1db1-11ec-9621-0242ac130002'
 STREAM_NAME_UUID = 'e3e654ba-1db1-11ec-9621-0242ac130002'
 STATUS_UUID = 'e3e655dc-1db1-11ec-9621-0242ac130002'
+WIFI_SCAN_UUID = 'e3e656fe-1db1-11ec-9621-0242ac130002'
 
 # Status codes for mobile app
 STATUS_PENDING = 0
@@ -306,6 +307,65 @@ class StatusCharacteristic(Characteristic):
         return dbus.Array([dbus.Byte(status)], signature='y')
 
 
+class WifiScanCharacteristic(Characteristic):
+    """WiFi scan characteristic - returns visible networks as JSON on read"""
+
+    def __init__(self, bus, index, service, provisioning_data):
+        Characteristic.__init__(
+            self, bus, index, WIFI_SCAN_UUID, ['read'], service)
+        self.provisioning_data = provisioning_data
+
+    def ReadValue(self, options):
+        if not self.provisioning_data.authenticated:
+            print("✗ Not authenticated - ignoring WiFi scan request")
+            return dbus.Array([], signature='y')
+
+        import subprocess
+        import json
+
+        print("📡 Scanning for WiFi networks...")
+        try:
+            # Force a fresh scan first
+            subprocess.run(
+                ['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
+                capture_output=True, timeout=5
+            )
+            time.sleep(2)
+
+            result = subprocess.run(
+                ['sudo', 'nmcli', '-t', '-f', 'SSID,SIGNAL', 'dev', 'wifi', 'list'],
+                capture_output=True, text=True, timeout=10
+            )
+
+            networks = []
+            seen = set()
+            for line in result.stdout.strip().split('\n'):
+                if not line.strip():
+                    continue
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    ssid = parts[0].strip()
+                    try:
+                        signal = int(parts[1].strip())
+                    except ValueError:
+                        signal = 0
+                    if ssid and ssid not in seen:
+                        seen.add(ssid)
+                        networks.append({"ssid": ssid, "signal": signal})
+
+            # Sort by signal strength descending, limit to top 15
+            networks.sort(key=lambda x: x["signal"], reverse=True)
+            networks = networks[:15]
+
+            payload = json.dumps(networks)
+            print(f"  Found {len(networks)} networks")
+            return dbus.Array([dbus.Byte(b) for b in payload.encode('utf-8')], signature='y')
+
+        except Exception as e:
+            print(f"✗ WiFi scan failed: {e}")
+            return dbus.Array([dbus.Byte(b) for b in b'[]'], signature='y')
+
+
 class ProvisioningService(dbus.service.Object):
     """Main GATT service for provisioning"""
 
@@ -327,6 +387,7 @@ class ProvisioningService(dbus.service.Object):
         self.add_characteristic(ServerIPCharacteristic(bus, 4, self, provisioning_data))
         self.add_characteristic(StreamNameCharacteristic(bus, 5, self, provisioning_data))
         self.add_characteristic(StatusCharacteristic(bus, 6, self, provisioning_data))
+        self.add_characteristic(WifiScanCharacteristic(bus, 7, self, provisioning_data))
 
     def add_characteristic(self, characteristic):
         self.characteristics.append(characteristic)
