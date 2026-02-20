@@ -17,6 +17,7 @@ from bluetooth_server import (
     STATUS_WIFI_CONNECTING,
     STATUS_WIFI_FAILED,
     STATUS_SUCCESS,
+    STATUS_WIFI_CONNECTED,
 )
 from network_setup import NetworkSetup
 
@@ -118,6 +119,7 @@ class ProvisioningManager:
             print(f"  WiFi connection attempt {attempt}/{max_wifi_attempts}...")
             if self.network_setup.configure_wifi(data.wifi_ssid, data.wifi_password):
                 wifi_success = True
+                self._set_status(STATUS_WIFI_CONNECTED)
                 break
             if attempt < max_wifi_attempts:
                 print(f"  Retrying in 10 seconds...")

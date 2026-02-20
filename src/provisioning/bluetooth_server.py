@@ -28,6 +28,7 @@ STATUS_AUTH_REQUIRED = 1
 STATUS_WIFI_CONNECTING = 2
 STATUS_WIFI_FAILED = 3
 STATUS_SUCCESS = 4
+STATUS_WIFI_CONNECTED = 5
 
 # Default server IP (Tailscale IP of MediaMTX server)
 DEFAULT_SERVER_IP = '100.72.64.80'
@@ -65,6 +66,11 @@ class ProvisioningData:
         # Track if provisioning is in progress to prevent duplicate callbacks
         self._provisioning_in_progress = False
 
+        # WiFi scan state (shared with WifiScanCharacteristic)
+        self._wifi_scan_thread = None
+        self._cached_scan_results = b'[]'
+        self._scan_in_progress = False
+
         # Status for mobile app feedback
         self.status = STATUS_PENDING
 
@@ -89,10 +95,68 @@ class ProvisioningData:
         if self.device_identity.validate_secret(secret):
             self.authenticated = True
             print("✓ Device authenticated via BLE")
+            # Pre-scan WiFi networks in background so results are cached
+            # before iOS reads the scan characteristic
+            self._start_wifi_scan()
             return True
         else:
             print("✗ Authentication failed - invalid secret")
             return False
+
+    def _start_wifi_scan(self):
+        """Kick off a background WiFi scan, caching results for later reads."""
+        if self._scan_in_progress:
+            return
+        import subprocess
+        import json
+
+        self._scan_in_progress = True
+
+        def _do_scan():
+            print("📡 Scanning for WiFi networks (background)...")
+            try:
+                subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
+                    capture_output=True, timeout=5
+                )
+                time.sleep(2)
+
+                result = subprocess.run(
+                    ['sudo', 'nmcli', '-t', '-f', 'SSID,SIGNAL', 'dev', 'wifi', 'list'],
+                    capture_output=True, text=True, timeout=10
+                )
+
+                networks = []
+                seen = set()
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        ssid = parts[0].strip()
+                        try:
+                            signal = int(parts[1].strip())
+                        except ValueError:
+                            signal = 0
+                        if ssid and ssid not in seen:
+                            seen.add(ssid)
+                            networks.append({"ssid": ssid, "signal": signal})
+
+                networks.sort(key=lambda x: x["signal"], reverse=True)
+                networks = networks[:15]
+
+                self._cached_scan_results = json.dumps(networks).encode('utf-8')
+                print(f"  Scan complete: {len(networks)} networks found")
+
+            except Exception as e:
+                print(f"✗ WiFi scan failed: {e}")
+                self._cached_scan_results = b'[]'
+            finally:
+                self._scan_in_progress = False
+
+        thread = threading.Thread(target=_do_scan, daemon=True)
+        self._wifi_scan_thread = thread
+        thread.start()
 
     def set_wifi_ssid(self, ssid):
         """Set WiFi SSID"""
@@ -168,8 +232,16 @@ class ProvisioningData:
         Running on_complete in a thread keeps the GLib main loop free so BLE
         stays responsive (iOS can read Status characteristic during provisioning).
         """
-        thread = threading.Thread(
-            target=self.on_complete, args=(self,), daemon=True)
+        def _run():
+            # Wait for any in-progress WiFi scan to finish before provisioning
+            # starts toggling the WiFi radio
+            scan_thread = self._wifi_scan_thread
+            if scan_thread is not None and scan_thread.is_alive():
+                print("  Waiting for WiFi scan to finish before provisioning...")
+                scan_thread.join(timeout=20)
+            self.on_complete(self)
+
+        thread = threading.Thread(target=_run, daemon=True)
         thread.start()
         return False  # Don't repeat
 
@@ -314,80 +386,26 @@ class StatusCharacteristic(Characteristic):
 
 
 class WifiScanCharacteristic(Characteristic):
-    """WiFi scan characteristic - returns visible networks as JSON on read.
+    """WiFi scan characteristic - returns cached network list on read.
 
-    Runs the nmcli scan in a background thread to avoid blocking the GLib
-    main loop (which would cause BLE timeouts on iOS). Returns cached
-    results immediately — the iOS app reads again after a short delay.
+    The actual scan is triggered earlier (on auth success) so WiFi radio
+    activity doesn't overlap with BLE read responses. ReadValue just
+    returns whatever is cached — no blocking, no new threads.
     """
 
     def __init__(self, bus, index, service, provisioning_data):
         Characteristic.__init__(
             self, bus, index, WIFI_SCAN_UUID, ['read'], service)
         self.provisioning_data = provisioning_data
-        self._cached_scan_results = b'[]'
-        self._scan_in_progress = False
-
-    def _do_scan(self):
-        """Run WiFi scan in background thread, update cached results when done."""
-        import subprocess
-        import json
-
-        print("📡 Scanning for WiFi networks (background)...")
-        try:
-            subprocess.run(
-                ['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
-                capture_output=True, timeout=5
-            )
-            time.sleep(2)
-
-            result = subprocess.run(
-                ['sudo', 'nmcli', '-t', '-f', 'SSID,SIGNAL', 'dev', 'wifi', 'list'],
-                capture_output=True, text=True, timeout=10
-            )
-
-            networks = []
-            seen = set()
-            for line in result.stdout.strip().split('\n'):
-                if not line.strip():
-                    continue
-                parts = line.split(':')
-                if len(parts) >= 2:
-                    ssid = parts[0].strip()
-                    try:
-                        signal = int(parts[1].strip())
-                    except ValueError:
-                        signal = 0
-                    if ssid and ssid not in seen:
-                        seen.add(ssid)
-                        networks.append({"ssid": ssid, "signal": signal})
-
-            networks.sort(key=lambda x: x["signal"], reverse=True)
-            networks = networks[:15]
-
-            self._cached_scan_results = json.dumps(networks).encode('utf-8')
-            print(f"  Scan complete: {len(networks)} networks found")
-
-        except Exception as e:
-            print(f"✗ WiFi scan failed: {e}")
-            self._cached_scan_results = b'[]'
-        finally:
-            self._scan_in_progress = False
 
     def ReadValue(self, options):
         if not self.provisioning_data.authenticated:
             print("✗ Not authenticated - ignoring WiFi scan request")
             return dbus.Array([], signature='y')
 
-        # Kick off a background scan if one isn't already running
-        if not self._scan_in_progress:
-            self._scan_in_progress = True
-            thread = threading.Thread(target=self._do_scan, daemon=True)
-            thread.start()
-
-        # Return cached results immediately (empty [] on first call)
-        print(f"  Returning cached WiFi scan ({len(self._cached_scan_results)} bytes)")
-        return dbus.Array([dbus.Byte(b) for b in self._cached_scan_results], signature='y')
+        cached = self.provisioning_data._cached_scan_results
+        print(f"  Returning cached WiFi scan ({len(cached)} bytes)")
+        return dbus.Array([dbus.Byte(b) for b in cached], signature='y')
 
 
 class ProvisioningService(dbus.service.Object):
