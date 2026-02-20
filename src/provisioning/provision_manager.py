@@ -9,6 +9,7 @@ import sys
 import time
 import signal
 from pathlib import Path
+from gi.repository import GLib
 
 from device_identity import DeviceIdentity
 from bluetooth_server import (
@@ -178,9 +179,9 @@ class ProvisioningManager:
         print("="*60)
         print()
 
-        # Stop Bluetooth server
+        # Stop Bluetooth server (must run on GLib main loop thread)
         time.sleep(2)
-        self.bluetooth_server.stop()
+        GLib.idle_add(self.bluetooth_server.stop)
 
     def start_provisioning(self):
         """Start the provisioning process"""
