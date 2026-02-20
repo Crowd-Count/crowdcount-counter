@@ -65,9 +65,8 @@ echo "Step 2/4: Installing systemd service..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=CrowdCount Auto-Updater (git pull + version reporting)
-After=network-online.target tailscaled.service
+After=network-online.target
 Wants=network-online.target
-Requires=tailscaled.service
 
 [Service]
 Type=simple

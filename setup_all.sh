@@ -49,7 +49,6 @@ echo "============================================================"
 sudo apt install -y \
     ffmpeg \
     python3-picamera2 \
-    python3-opencv \
     libcamera-apps
 
 echo "✓ Camera & video dependencies installed"
@@ -107,8 +106,8 @@ sudo apt install -y python3-pip
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     echo "Installing from requirements.txt..."
-    echo "Note: Heavy packages (opencv, picamera2, dbus, pygobject) already installed via apt"
-    echo "      Only installing lightweight packages (requests, configparser, etc.)"
+    echo "Note: Heavy packages (picamera2, dbus, pygobject) already installed via apt"
+    echo "      Only installing lightweight packages (requests, etc.)"
     echo "      Using --break-system-packages for Raspberry Pi OS"
     sudo pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages
     echo "✓ Python dependencies installed"
@@ -223,13 +222,6 @@ if python3 -c "import picamera2" 2>/dev/null; then
     echo "  ✓ picamera2 available"
 else
     echo "  ✗ picamera2 NOT available"
-fi
-
-# Check OpenCV
-if python3 -c "import cv2" 2>/dev/null; then
-    echo "  ✓ opencv (cv2) available"
-else
-    echo "  ✗ opencv NOT available"
 fi
 
 # Check FFmpeg

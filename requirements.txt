@@ -14,12 +14,6 @@
 # This ensures hardware acceleration and proper integration
 # picamera2>=0.3.12  # COMMENTED OUT - install via apt instead
 
-# OpenCV - Video processing and encoding
-# RECOMMENDED: Install via apt for better performance:
-#   sudo apt install -y python3-opencv
-# Or install via pip (may require compilation):
-# opencv-python>=4.5.0  # COMMENTED OUT - install via apt instead
-
 # ============================================================
 # BLUETOOTH PROVISIONING (D-Bus/BlueZ)
 # ============================================================
@@ -42,13 +36,6 @@
 requests>=2.28.0
 
 # ============================================================
-# CONFIGURATION
-# ============================================================
-
-# Config file parsing (built-in but specified for completeness)
-configparser>=5.0.0
-
-# ============================================================
 # SYSTEM DEPENDENCIES (installed via apt)
 # ============================================================
 #
@@ -57,7 +44,6 @@ configparser>=5.0.0
 # Camera & Video:
 #   sudo apt install -y ffmpeg
 #   sudo apt install -y python3-picamera2
-#   sudo apt install -y python3-opencv
 #
 # Bluetooth:
 #   sudo apt install -y bluetooth bluez

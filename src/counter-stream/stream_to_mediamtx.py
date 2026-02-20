@@ -4,7 +4,6 @@ Raspberry Pi Camera to MediaMTX RTSP Streamer
 Streams camera footage from Raspberry Pi to MediaMTX server via RTSP over Tailscale
 """
 
-import cv2
 import subprocess
 import time
 import sys
@@ -20,7 +19,13 @@ try:
     PICAMERA2_AVAILABLE = True
 except ImportError:
     PICAMERA2_AVAILABLE = False
-    print("picamera2 not available, will use legacy camera")
+    print("picamera2 not available")
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
 
 # Import video config - try relative import first, then absolute
 try:
@@ -164,7 +169,12 @@ class RTSPCameraStreamer:
                     self.picam2 = None
 
         # If libcamera failed or no cameras detected, try legacy camera
-        print("No libcamera cameras found, trying legacy camera...")
+        if not CV2_AVAILABLE:
+            print("No libcamera cameras found and OpenCV not installed, cannot use legacy camera")
+            print("✗ Error: Could not open any video device")
+            return False
+
+        print("No libcamera cameras found, trying legacy camera (OpenCV)...")
 
         # Try different video device indices (Pi 5 uses higher numbers)
         video_devices = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]

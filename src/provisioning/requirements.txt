@@ -6,6 +6,3 @@ PyGObject>=3.42.0
 
 # Network requests
 requests>=2.28.0
-
-# System integration
-configparser>=5.0.0

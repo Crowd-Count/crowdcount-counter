@@ -131,9 +131,21 @@ def report_version(device_id: str, password: str, commit_hash: str) -> None:
         logger.warning("Could not reach API to report version: %s", exc)
 
 
+def ensure_git_safe_directory() -> None:
+    """Mark the repo directory as safe for git (needed when service runs as root
+    but repo is owned by another user)."""
+    subprocess.run(
+        ["git", "config", "--global", "--add", "safe.directory", str(REPO_DIR)],
+        capture_output=True,
+        text=True,
+    )
+
+
 def check_and_update(device_id: str, password: str) -> None:
     """Fetch origin/main, pull if changed, restart main service, report version."""
     logger.info("Checking for updates...")
+
+    ensure_git_safe_directory()
 
     # Fetch latest
     fetch = subprocess.run(
@@ -204,7 +216,13 @@ def main() -> None:
     logger.info("Current version: %s", commit[:8])
     report_version(device_id, password, commit)
 
-    # Main loop
+    # Check for updates immediately on startup
+    try:
+        check_and_update(device_id, password)
+    except Exception as exc:
+        logger.error("Initial update check failed: %s", exc)
+
+    # Then check periodically
     while True:
         time.sleep(UPDATE_INTERVAL_SECONDS)
         try:

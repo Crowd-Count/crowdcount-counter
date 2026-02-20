@@ -74,15 +74,6 @@ else
     echo "  sudo apt install -y python3-picamera2"
 fi
 
-# Check for OpenCV (used by the streaming script)
-if python3 -c "import cv2" 2>/dev/null; then
-    echo "✓ OpenCV (cv2) is installed"
-else
-    echo "⚠ OpenCV is not installed"
-    echo "  Install with:"
-    echo "  sudo apt install -y python3-opencv"
-fi
-
 # Installation complete
 echo ""
 echo "============================================================"
