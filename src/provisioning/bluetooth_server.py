@@ -68,7 +68,7 @@ class ProvisioningData:
 
         # WiFi scan state (shared with WifiScanCharacteristic)
         self._wifi_scan_thread = None
-        self._cached_scan_results = b'[]'
+        self._cached_scan_results = b''
         self._scan_in_progress = False
 
         # Status for mobile app feedback
@@ -154,7 +154,7 @@ class ProvisioningData:
 
             except Exception as e:
                 print(f"✗ WiFi scan failed: {e}")
-                self._cached_scan_results = b'[]'
+                self._cached_scan_results = b''
             finally:
                 self._scan_in_progress = False
 
