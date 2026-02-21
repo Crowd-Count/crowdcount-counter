@@ -144,10 +144,7 @@ class ProvisioningData:
 
                 networks.sort(key=lambda x: x["signal"], reverse=True)
 
-                # BLE reads are limited to ~512 bytes; trim networks until JSON fits
                 networks = networks[:10]
-                while networks and len(json.dumps(networks).encode('utf-8')) > 500:
-                    networks.pop()
 
                 self._cached_scan_results = json.dumps(networks).encode('utf-8')
                 print(f"  Scan complete: {len(networks)} networks found")
@@ -408,8 +405,11 @@ class WifiScanCharacteristic(Characteristic):
             return dbus.Array([], signature='y')
 
         cached = self.provisioning_data._cached_scan_results
-        print(f"  Returning cached WiFi scan ({len(cached)} bytes)")
-        return dbus.Array([dbus.Byte(b) for b in cached], signature='y')
+        # Handle Read Blob offset for long characteristics (data > MTU)
+        offset = int(options.get('offset', 0))
+        chunk = cached[offset:]
+        print(f"  Returning WiFi scan offset={offset} ({len(chunk)}/{len(cached)} bytes)")
+        return dbus.Array([dbus.Byte(b) for b in chunk], signature='y')
 
 
 class ProvisioningService(dbus.service.Object):
