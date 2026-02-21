@@ -143,10 +143,13 @@ class ProvisioningData:
                             networks.append({"ssid": ssid, "signal": signal})
 
                 networks.sort(key=lambda x: x["signal"], reverse=True)
-
                 networks = networks[:15]
 
-                self._cached_scan_results = json.dumps(networks).encode('utf-8')
+                # Use compact pipe-delimited format to fit in 512-byte BLE limit
+                # Format: "SSID|signal\nSSID2|signal2\n..."
+                # ~25 bytes per entry vs ~40 for JSON = fits 15 networks easily
+                compact = "\n".join(f"{n['ssid']}|{n['signal']}" for n in networks)
+                self._cached_scan_results = compact.encode('utf-8')
                 print(f"  Scan complete: {len(networks)} networks found")
 
             except Exception as e:
