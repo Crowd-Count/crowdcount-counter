@@ -144,7 +144,7 @@ class ProvisioningData:
 
                 networks.sort(key=lambda x: x["signal"], reverse=True)
 
-                networks = networks[:10]
+                networks = networks[:15]
 
                 self._cached_scan_results = json.dumps(networks).encode('utf-8')
                 print(f"  Scan complete: {len(networks)} networks found")
