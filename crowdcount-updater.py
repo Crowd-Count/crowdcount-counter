@@ -23,6 +23,7 @@ UPDATE_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
 API_BASE_URL = "https://api.crowdcount.tech"
 REPO_DIR = Path(__file__).parent
 MAIN_SERVICE = "crowdcount-main.service"
+UPDATER_SERVICE = "crowdcount-updater.service"
 
 IDENTITY_PATHS = [
     Path("/boot/firmware/device-identity.conf"),
@@ -201,6 +202,16 @@ def check_and_update(device_id: str, password: str) -> None:
     # Report new version
     new_commit = get_current_commit()
     report_version(device_id, password, new_commit)
+
+    # Restart ourselves so the updater runs the new code too.
+    # --no-block queues the restart asynchronously so we can finish logging
+    # before systemd kills this process.
+    logger.info("Restarting updater service to pick up new code")
+    subprocess.run(
+        ["systemctl", "restart", "--no-block", UPDATER_SERVICE],
+        capture_output=True,
+        text=True,
+    )
 
 
 # ── Main loop ────────────────────────────────────────────────────────────

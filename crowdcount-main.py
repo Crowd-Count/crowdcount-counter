@@ -331,15 +331,20 @@ class CrowdCountMain:
         return DEVICE_CONFIG.exists()
 
     def try_saved_wifi(self, max_attempts=3, retry_delay=5):
-        """Try to connect to saved WiFi credentials before provisioning
+        """Try to connect to saved WiFi credentials before provisioning,
+        then fallback networks.
 
         Args:
-            max_attempts: Number of connection attempts
+            max_attempts: Number of connection attempts per network
             retry_delay: Seconds between attempts
 
         Returns:
             bool: True if connected successfully
         """
+        FALLBACK_NETWORKS = [
+            ("Elkan's iPhone", "CrowdCountHotspot"),
+        ]
+
         # Check for saved WiFi credentials
         credential_locations = [
             Path('/boot/firmware/wifi-credentials.conf'),
@@ -347,8 +352,8 @@ class CrowdCountMain:
             Path.home() / '.config' / 'crowdcount' / 'wifi-credentials.conf',
         ]
 
-        ssid = None
-        password = None
+        saved_ssid = None
+        saved_password = None
 
         for config_file in credential_locations:
             if config_file.exists():
@@ -357,67 +362,78 @@ class CrowdCountMain:
                         for line in f:
                             line = line.strip()
                             if line.startswith('WIFI_SSID='):
-                                ssid = line.split('=', 1)[1]
+                                saved_ssid = line.split('=', 1)[1]
                             elif line.startswith('WIFI_PASSWORD='):
-                                password = line.split('=', 1)[1]
+                                saved_password = line.split('=', 1)[1]
 
-                    if ssid and password:
-                        print(f"✓ Found saved WiFi credentials for: {ssid}")
+                    if saved_ssid and saved_password:
+                        print(f"✓ Found saved WiFi credentials for: {saved_ssid}")
                         break
                 except Exception as e:
                     print(f"⚠ Error reading {config_file}: {e}")
                     continue
 
-        if not ssid or not password:
-            print("No saved WiFi credentials found")
+        # Build list of networks: saved first, then fallbacks
+        networks = []
+        if saved_ssid and saved_password:
+            networks.append((saved_ssid, saved_password))
+        for fb_ssid, fb_pass in FALLBACK_NETWORKS:
+            if fb_ssid != saved_ssid:
+                networks.append((fb_ssid, fb_pass))
+
+        if not networks:
+            print("No saved or fallback WiFi credentials found")
             return False
 
-        print(f"📡 Attempting to connect to saved WiFi: {ssid}")
+        for ssid, password in networks:
+            print(f"📡 Attempting to connect to WiFi: {ssid}")
 
-        for attempt in range(1, max_attempts + 1):
-            print(f"  Attempt {attempt}/{max_attempts}...")
+            for attempt in range(1, max_attempts + 1):
+                print(f"  Attempt {attempt}/{max_attempts}...")
 
-            try:
-                # First check if already connected
-                wifi_connected, current_ssid = self.check_wifi_connected()
-                if wifi_connected:
-                    print(f"✓ Already connected to WiFi: {current_ssid}")
-                    return True
+                try:
+                    # First check if already connected
+                    wifi_connected, current_ssid = self.check_wifi_connected()
+                    if wifi_connected:
+                        print(f"✓ Already connected to WiFi: {current_ssid}")
+                        return True
 
-                # Turn on WiFi radio if off
-                subprocess.run(
-                    ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
-                    capture_output=True,
-                    timeout=10
-                )
-                time.sleep(2)
+                    # Turn on WiFi radio if off
+                    subprocess.run(
+                        ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
+                        capture_output=True,
+                        timeout=10
+                    )
+                    time.sleep(2)
 
-                # Try to connect
-                result = subprocess.run(
-                    ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
-                     'password', password],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
+                    # Try to connect
+                    result = subprocess.run(
+                        ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
+                         'password', password],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
 
-                if result.returncode == 0:
-                    print(f"✓ Connected to saved WiFi: {ssid}")
-                    return True
-                else:
-                    error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                    print(f"  Connection failed: {error_msg}")
+                    if result.returncode == 0:
+                        print(f"✓ Connected to WiFi: {ssid}")
+                        return True
+                    else:
+                        error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                        print(f"  Connection failed: {error_msg}")
 
-            except subprocess.TimeoutExpired:
-                print(f"  Connection attempt timed out")
-            except Exception as e:
-                print(f"  Error: {e}")
+                except subprocess.TimeoutExpired:
+                    print(f"  Connection attempt timed out")
+                except Exception as e:
+                    print(f"  Error: {e}")
 
-            if attempt < max_attempts:
-                print(f"  Retrying in {retry_delay} seconds...")
-                time.sleep(retry_delay)
+                if attempt < max_attempts:
+                    print(f"  Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
 
-        print(f"✗ Failed to connect to saved WiFi after {max_attempts} attempts")
+            print(f"✗ Failed to connect to {ssid} after {max_attempts} attempts")
+
+        print(f"✗ Failed to connect to any WiFi network")
         return False
 
     def check_tailscale_connected(self):
