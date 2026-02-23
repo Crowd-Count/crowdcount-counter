@@ -167,7 +167,7 @@ class CrowdCountMain:
             if resp.ok:
                 print(f"✓ Reported version {commit[:8]} to server")
             else:
-                print(f"⚠ Version report failed ({resp.status_code})")
+                print(f"⚠ Version report failed ({resp.status_code}): {resp.text}")
         except Exception as e:
             print(f"⚠ Could not report version: {e}")
 
