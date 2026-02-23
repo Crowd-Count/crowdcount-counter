@@ -37,41 +37,30 @@ class NetworkSetup:
         self.tailscale_connected = False
 
     def _sanitize_ssid(self, ssid: str) -> bool:
-        """Validate SSID to prevent command injection.
+        """Validate SSID format.
 
         Returns:
-            True if SSID is safe, False otherwise
+            True if SSID is valid, False otherwise
         """
         if not ssid or not isinstance(ssid, str):
             return False
 
-        # Check length (WiFi SSIDs are max 32 bytes)
-        if len(ssid) > 32 or len(ssid) == 0:
-            return False
-
-        # Disallow dangerous shell metacharacters
-        dangerous_chars = ['$', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '\n', '\r', '\\', '"', "'"]
-        if any(char in ssid for char in dangerous_chars):
+        # WiFi SSIDs are max 32 bytes
+        if len(ssid.encode('utf-8')) > 32:
             return False
 
         return True
 
     def _sanitize_password(self, password: str) -> bool:
-        """Validate WiFi password to prevent command injection.
+        """Validate WiFi password format.
 
         Returns:
-            True if password is safe, False otherwise
+            True if password is valid, False otherwise
         """
         if not password or not isinstance(password, str):
             return False
 
-        # Check length (reasonable limits)
-        if len(password) > 256 or len(password) == 0:
-            return False
-
-        # Disallow dangerous shell metacharacters
-        dangerous_chars = ['$', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '\n', '\r', '\\']
-        if any(char in password for char in dangerous_chars):
+        if len(password) > 256:
             return False
 
         return True
