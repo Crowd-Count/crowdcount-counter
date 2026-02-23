@@ -266,17 +266,15 @@ class CrowdCountMain:
         except Exception:
             pass
 
-        # Method 3: Check default route (indicates internet connectivity)
+        # Method 3: Check default route on wlan0 (not tailscale/lo)
         try:
             result = subprocess.run(
-                ['ip', 'route', 'show', 'default'],
+                ['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
                 capture_output=True,
                 timeout=5,
                 text=True
             )
             if result.returncode == 0 and result.stdout.strip():
-                # Has default route - likely connected
-                # Try to get WiFi info
                 ssid = self._get_ssid_from_wpa()
                 return True, ssid if ssid else "unknown"
         except Exception:
