@@ -482,7 +482,6 @@ class CrowdCountMain:
 
             # Wait for provisioning to complete
             return_code = self.current_process.wait()
-            self.current_process = None
 
             if return_code == 0:
                 print("\n✓ Provisioning completed successfully")
@@ -493,8 +492,15 @@ class CrowdCountMain:
 
         except Exception as e:
             print(f"\n✗ Error running provisioning: {e}")
-            self.current_process = None
             return False
+        finally:
+            if self.current_process:
+                try:
+                    self.current_process.kill()
+                    self.current_process.wait(timeout=5)
+                except Exception:
+                    pass
+            self.current_process = None
 
     def run_streaming(self):
         """Run the streaming process"""
@@ -516,7 +522,6 @@ class CrowdCountMain:
 
             # Wait for streaming to complete (runs indefinitely)
             return_code = self.current_process.wait()
-            self.current_process = None
 
             if return_code == 0:
                 print("\n✓ Streaming stopped normally")
@@ -527,8 +532,15 @@ class CrowdCountMain:
 
         except Exception as e:
             print(f"\n✗ Error running streaming: {e}")
-            self.current_process = None
             return False
+        finally:
+            if self.current_process:
+                try:
+                    self.current_process.kill()
+                    self.current_process.wait(timeout=5)
+                except Exception:
+                    pass
+            self.current_process = None
 
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""
@@ -536,13 +548,20 @@ class CrowdCountMain:
             print("\n⚠ Received shutdown signal")
             self.running = False
 
-            if self.current_process:
+            proc = self.current_process
+            if proc:
                 print("Stopping current process...")
                 try:
-                    self.current_process.terminate()
-                    self.current_process.wait(timeout=5)
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                    except Exception:
+                        pass
                 except Exception:
-                    self.current_process.kill()
+                    pass
 
             sys.exit(0)
 

@@ -149,24 +149,34 @@ def check_and_update(device_id: str, password: str) -> None:
     ensure_git_safe_directory()
 
     # Fetch latest
-    fetch = subprocess.run(
-        ["git", "fetch", "origin", "main"],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "origin", "main"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("git fetch timed out")
+        return
     if fetch.returncode != 0:
         logger.warning("git fetch failed: %s", fetch.stderr.strip())
         return
 
     # Compare HEAD vs origin/main
     local = get_current_commit()
-    remote_result = subprocess.run(
-        ["git", "rev-parse", "origin/main"],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        remote_result = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("git rev-parse timed out")
+        return
     remote = remote_result.stdout.strip()
 
     if local == remote:
@@ -176,12 +186,17 @@ def check_and_update(device_id: str, password: str) -> None:
     logger.info("Update available: %s -> %s", local[:8], remote[:8])
 
     # Pull
-    pull = subprocess.run(
-        ["git", "pull", "origin", "main"],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        pull = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("git pull timed out")
+        return
     if pull.returncode != 0:
         logger.error("git pull failed: %s", pull.stderr.strip())
         return

@@ -145,11 +145,13 @@ class NetworkSetup:
 
         try:
             # Turn WiFi off and on to ensure clean state
-            subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'off'],
-                         check=True, capture_output=True)
-            time.sleep(2)
-            subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'],
-                         check=True, capture_output=True)
+            try:
+                subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'off'],
+                             capture_output=True, timeout=10)
+                time.sleep(2)
+            finally:
+                subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'],
+                             capture_output=True, timeout=10)
 
             # Wait for WiFi radio to come up and scan for networks
             # Pi Zero 2W can be slow to scan - wait until we see the target SSID
@@ -221,8 +223,8 @@ class NetworkSetup:
                 print(f"✗ WiFi connection failed: {result.stderr}")
                 return False
 
-        except subprocess.TimeoutExpired:
-            print("✗ WiFi connection timed out")
+        except subprocess.TimeoutExpired as e:
+            print(f"✗ WiFi configuration timed out during: {e.cmd}")
             return False
         except Exception as e:
             print(f"✗ WiFi configuration error: {e}")
