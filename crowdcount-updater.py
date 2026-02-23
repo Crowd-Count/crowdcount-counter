@@ -188,6 +188,14 @@ def check_and_update(device_id: str, password: str) -> None:
 
     logger.info("Update available: %s -> %s", local[:8], remote[:8])
 
+    # Discard local changes (e.g. chmod +x from install scripts) so pull doesn't fail
+    subprocess.run(
+        ["git", "checkout", "--", "."],
+        cwd=REPO_DIR,
+        capture_output=True,
+        text=True,
+    )
+
     # Pull
     try:
         pull = subprocess.run(
