@@ -161,7 +161,10 @@ class CrowdCountMain:
                 "password": self.api_password,
                 "commit_hash": commit,
             })
-            headers = {"Content-Type": "application/json"}
+            headers = {
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid.uuid4()),
+            }
             headers.update(self._sign_request("POST", url, payload))
             resp = requests.post(url, data=payload, headers=headers, timeout=30)
             if resp.ok:

@@ -119,7 +119,10 @@ def report_version(device_id: str, password: str, commit_hash: str) -> None:
         "password": password,
         "commit_hash": commit_hash,
     })
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "Idempotency-Key": str(uuid.uuid4()),
+    }
     headers.update(sign_request(device_id, password, "POST", url, payload))
 
     try:
