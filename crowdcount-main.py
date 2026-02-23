@@ -583,9 +583,7 @@ class CrowdCountMain:
         self.authenticate_tailscale()
         print()
 
-        # Report current version to API server
-        self.report_version()
-        print()
+        version_reported = False
 
         # Main decision loop
         while self.running:
@@ -640,6 +638,10 @@ class CrowdCountMain:
                     print("Waiting for Tailscale to connect...")
                     time.sleep(5)
                     continue
+
+                if not version_reported:
+                    self.report_version()
+                    version_reported = True
 
                 print("Decision: Starting streaming")
                 success = self.run_streaming()
