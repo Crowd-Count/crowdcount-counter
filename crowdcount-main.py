@@ -222,7 +222,7 @@ class CrowdCountMain:
             if result.returncode == 0:
                 state = result.stdout.strip()
                 if state in ['connected', 'connected (site only)', 'connected (local only)']:
-                    # Get SSID from NetworkManager
+                    # Verify WiFi specifically is connected (not just Tailscale/loopback)
                     try:
                         ssid_result = subprocess.run(
                             ['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'],
@@ -236,7 +236,7 @@ class CrowdCountMain:
                                 return True, ssid if ssid else "unknown"
                     except Exception:
                         pass
-                    return True, "unknown"
+                    # nmcli says connected but no active WiFi — Tailscale or other non-WiFi connection
         except FileNotFoundError:
             pass  # nmcli not available, try next method
         except Exception:
