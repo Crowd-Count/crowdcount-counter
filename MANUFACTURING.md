@@ -1,6 +1,8 @@
-# CrowdCount Counter - Setup Guide
+# CrowdCount Counter - Manufacturing Guide
 
-Complete guide for setting up a new CrowdCount counter device from a brand new Raspberry Pi Zero 2W.
+Complete guide for setting up and mass-producing CrowdCount counter devices on Raspberry Pi Zero 2W.
+
+**Manufacturing flow:** Create master image once, then for each device: insert SD card, run one script, eject, boot. No SSH needed.
 
 ---
 
@@ -10,13 +12,12 @@ Complete guide for setting up a new CrowdCount counter device from a brand new R
 - Raspberry Pi Zero 2W
 - Raspberry Pi Global Shutter Camera (or compatible camera)
 - 16GB+ microSD card (32GB recommended)
-- SD card reader for your computer
+- SD card reader for your Mac
 - USB power supply (5V 2.5A recommended)
-- (Optional) Mini HDMI adapter + keyboard for initial setup
 
-### Software Required on Your Computer
+### Software Required on Your Mac
 - Raspberry Pi Imager (https://www.raspberrypi.com/software/)
-- SSH client (built into macOS/Linux, PuTTY on Windows)
+- `qrencode` — install with `brew install qrencode`
 
 ### Network Requirements
 - WiFi network name and password
@@ -25,9 +26,9 @@ Complete guide for setting up a new CrowdCount counter device from a brand new R
 
 ---
 
-## Part 1: First-Time Setup (Creating Master Image)
+## Part 1: Creating the Master Image (One-Time Setup)
 
-**Do this once to create a reusable base image for all your devices.**
+**Do this once. The result is `crowdcount-master.img.gz` — used to flash every device.**
 
 ### Step 1.1: Flash Raspberry Pi OS
 
@@ -35,36 +36,24 @@ Complete guide for setting up a new CrowdCount counter device from a brand new R
 2. Open Raspberry Pi Imager
 3. Select:
    - **Device**: Raspberry Pi Zero 2W
-   - **OS**: Raspberry Pi OS Lite (64-bit) - under "Raspberry Pi OS (other)"
+   - **OS**: Raspberry Pi OS Lite (64-bit) — under "Raspberry Pi OS (other)"
    - **Storage**: Your SD card
 
-4. Click the gear icon (⚙️) for advanced options:
+4. Click the gear icon for advanced options:
    - **Set hostname**: `crowdcount-base`
    - **Enable SSH**: Yes, with password authentication
    - **Set username**: `counter`
-   - **Set password**: `temppass123` (temporary, will be changed per-device)
+   - **Set password**: `temppass123` (temporary, overwritten per-device by firstboot)
    - **Configure WiFi**: Enter your WiFi credentials
    - **Set locale**: Your timezone
 
 5. Click **Write** and wait for completion
 
-### Step 1.2: First Boot
+### Step 1.2: First Boot & SSH In
 
-1. Insert SD card into Raspberry Pi Zero 2W
-2. Connect camera ribbon cable
-3. Power on the Pi
-4. Wait 2-3 minutes for first boot
-
-5. Find the Pi on your network:
-   ```bash
-   # On macOS/Linux:
-   ping crowdcount-base.local
-
-   # Or scan your network:
-   arp -a | grep -i raspberry
-   ```
-
-6. SSH into the Pi:
+1. Insert SD card into Pi, connect camera, power on
+2. Wait 2-3 minutes for first boot
+3. SSH in:
    ```bash
    ssh counter@crowdcount-base.local
    # Password: temppass123
@@ -72,31 +61,17 @@ Complete guide for setting up a new CrowdCount counter device from a brand new R
 
 ### Step 1.3: Install CrowdCount Software
 
-Run these commands on the Pi:
-
 ```bash
-# Update system
 sudo apt update && sudo apt upgrade -y
-
-# Install git
 sudo apt install -y git
 
-# Clone CrowdCount repository
 cd /home/counter
 git clone https://github.com/YOUR_ORG/crowdcount-counter.git
-
-# Run the setup script (takes 10-15 minutes)
 cd crowdcount-counter
 ./setup_all.sh
 ```
 
-The setup script installs:
-- FFmpeg, OpenCV, Picamera2 (video)
-- Bluetooth/BlueZ (provisioning)
-- NetworkManager (WiFi)
-- Tailscale VPN
-- All Python dependencies
-- CrowdCount systemd services
+This installs everything: camera deps, Bluetooth, Tailscale, Python packages, and all systemd services (main, updater, firstboot).
 
 ### Step 1.4: Configure Shared Settings
 
@@ -106,197 +81,165 @@ Edit the device configuration (same for ALL devices):
 nano /home/counter/crowdcount-counter/src/counter-stream/device-info.conf
 ```
 
-Set these values:
 ```ini
-# MediaMTX server Tailscale IP (get from: tailscale status on your server)
 SERVER_IP=100.72.64.80
-
-# Video settings (recommended for Pi Zero 2W)
 RTSP_PORT=8554
 WIDTH=640
 HEIGHT=480
 FPS=30
-
-# CrowdCount API
 API_URL=https://api.crowdcount.tech
-
-# Tailscale auth key (get from: https://login.tailscale.com/admin/settings/keys)
-# Create a "Reusable" key, it will work for 90 days
 TAILSCALE_AUTH_KEY=tskey-auth-xxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Save and exit (Ctrl+X, Y, Enter).
+### Step 1.5: Set Up Deploy Key (for Private Repo Auto-Updates)
 
-### Step 1.5: Test the Setup
+The updater service needs to `git pull` from a private GitHub repo. Generate a deploy key that will be baked into the master image.
 
-Before creating the master image, test that everything works:
+**On the Pi:**
+
+```bash
+# Generate an SSH keypair (no passphrase)
+ssh-keygen -t ed25519 -C "crowdcount-deploy" -f /home/counter/.ssh/crowdcount_deploy -N ""
+
+# Configure SSH to use this key for GitHub
+cat >> /home/counter/.ssh/config <<'EOF'
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile /home/counter/.ssh/crowdcount_deploy
+    IdentitiesOnly yes
+EOF
+
+chmod 600 /home/counter/.ssh/config
+
+# Display the public key
+cat /home/counter/.ssh/crowdcount_deploy.pub
+```
+
+**On GitHub:**
+
+1. Go to your repo Settings > Deploy keys
+2. Click "Add deploy key"
+3. Title: `CrowdCount Devices`
+4. Paste the public key from above
+5. Leave "Allow write access" **unchecked** (read-only)
+6. Click "Add key"
+
+**Back on the Pi — switch remote to SSH:**
+
+```bash
+cd /home/counter/crowdcount-counter
+git remote set-url origin git@github.com:YOUR_ORG/crowdcount-counter.git
+
+# Test it works
+git fetch origin main
+```
+
+### Step 1.6: Test Everything
 
 ```bash
 # Test camera
 libcamera-hello --timeout 5000
 
-# Test Tailscale (temporary auth for testing)
+# Test Tailscale
 sudo tailscale up
 
-# Check service status
+# Check services
 sudo systemctl status crowdcount-main
+sudo systemctl status crowdcount-updater
+sudo systemctl status crowdcount-firstboot
+
+# Test git pull (deploy key)
+cd /home/counter/crowdcount-counter
+git fetch origin main
 ```
 
-### Step 1.6: Create Master Image
-
-Once everything works, create your reusable master image:
+### Step 1.7: Create the Master Image
 
 ```bash
-# On the Pi: clean up and shutdown
+# On the Pi: clean up
 sudo apt clean
 sudo rm -rf /var/cache/apt/archives/*
 history -c
 sudo shutdown -h now
 ```
 
-Remove the SD card and insert into your computer:
+Remove the SD card, insert into your Mac:
 
 ```bash
-# On your computer (Linux/macOS):
-# Find your SD card device (BE CAREFUL - wrong device will destroy data!)
-lsblk  # or: diskutil list (macOS)
+# Find your SD card
+diskutil list
 
-# Create the master image (replace sdX with your device)
-sudo dd if=/dev/sdX of=crowdcount-master.img bs=4M status=progress
-
-# Compress for storage (saves ~70% space)
-gzip crowdcount-master.img
+# Create the master image (replace diskN with your disk)
+sudo dd if=/dev/rdiskN bs=4m status=progress | gzip > crowdcount-master.img.gz
 
 # Result: crowdcount-master.img.gz (~2GB)
 ```
 
-**Save this file securely - it's your master image for all devices!**
+Move `crowdcount-master.img.gz` into the `crowdcount-counter/` directory (the flash script looks there by default).
 
 ---
 
-## Part 2: Manufacturing New Devices
+## Part 2: Manufacturing Devices (Per Device)
 
-**Repeat this for each new counter device.**
+**For each device: one command, no SSH.**
 
-### Step 2.1: Flash Master Image to New SD Card
+### The One-Command Flow
 
 ```bash
-# Insert blank SD card
-# Find device name
-lsblk  # Linux
-diskutil list  # macOS
-
-# Flash master image (replace /dev/sdX with your device)
-gunzip -c crowdcount-master.img.gz | sudo dd of=/dev/sdX bs=4M status=progress
-
-# Sync and wait
-sync
+cd crowdcount-counter
+./manufacturing/flash_device.sh
 ```
 
-### Step 2.2: Customize Device Identity
+The script will:
+1. Prompt you for: Device ID, Bluetooth secret, SSH password, API password
+2. Show you available disks, ask you to confirm the SD card
+3. Flash the master image (~2 min)
+4. Mount the boot partition and write `device-identity.conf`
+5. Generate a QR code for the device
+6. Eject the SD card
 
-Each device needs a unique identity. Run the customization script:
+**That's it.** Insert the SD card into a Pi, power on, and it's fully operational:
+- Hostname is auto-set to the Device ID
+- Password is auto-set from identity file
+- All services start automatically
+- No SSH required
 
-```bash
-cd crowdcount-counter/manufacturing
+### What Happens on First Boot
 
-# Usage: ./customize_sd_card.sh <device> <hostname> <secret> <device_pass> <api_pass>
-./customize_sd_card.sh /dev/sdX T0001 mysecret123 mypassword123 myapipass123
-```
+The `crowdcount-firstboot` service runs once (before `crowdcount-main`) and:
+1. Reads `/boot/firmware/device-identity.conf`
+2. Sets the OS hostname to `DEVICE_ID`
+3. Sets the `counter` user password to `DEVICE_PASSWORD`
+4. Creates `/boot/firmware/.firstboot-done` marker (so it never runs again)
 
-**Parameters:**
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `device` | SD card device | `/dev/sdb` or `/dev/mmcblk0` |
-| `hostname` | 5-char device ID | `T0001`, `T0002`, etc. |
-| `secret` | Bluetooth pairing secret | `mysecret123` |
-| `device_pass` | SSH password for 'counter' user | `mypassword123` |
-| `api_pass` | CrowdCount API password | `myapipass123` |
+Then `crowdcount-main` starts normally — Tailscale auth, streaming, etc.
 
-The script creates `/boot/firmware/device-identity.conf` with your values.
+### Verify a Device (Optional)
 
-### Step 2.3: Eject SD Card
-
-```bash
-# Safely eject
-sudo eject /dev/sdX  # Linux
-diskutil eject /dev/diskN  # macOS
-
-# Label the SD card or Pi case with: T0001
-```
-
-### Step 2.4: First Boot of New Device
-
-1. Insert SD card into new Raspberry Pi Zero 2W
-2. Connect camera
-3. Power on
-4. Wait 2-3 minutes for boot
-
-5. SSH into the device:
-   ```bash
-   # Initially uses base hostname
-   ssh counter@crowdcount-base.local
-   # Password: temppass123 (from master image)
-   ```
-
-6. Set the device password and hostname:
-   ```bash
-   # Set device password (use same as device_pass from Step 2.2)
-   echo 'counter:mypassword123' | sudo chpasswd
-
-   # Set hostname to match device ID
-   sudo hostnamectl set-hostname T0001
-
-   # Reboot to apply
-   sudo reboot
-   ```
-
-### Step 2.5: Verify Device
-
-After reboot:
+After the Pi boots (~2-3 minutes):
 
 ```bash
-# SSH with new hostname
-ssh counter@T0001.local
-# Or via Tailscale: ssh counter@T0001
+ssh counter@T0005.local
+# Password: (what you entered during flash)
 
-# Verify device identity
-cat /boot/firmware/device-identity.conf
-
-# Check service is running
 sudo systemctl status crowdcount-main
-
-# Watch live logs
-sudo journalctl -u crowdcount-main -f
+sudo journalctl -u crowdcount-firstboot   # Should show hostname/password set
 ```
-
-**Expected log output:**
-```
-✓ Loaded device identity: T0001
-✓ Tailscale authenticated as T0001
-STARTING STREAMING MODE
-✓ Modern camera (libcamera) initialized: 640x480@30fps
-▶ Streaming started
-```
-
-**Device is ready for deployment!**
 
 ---
 
 ## Part 3: Quick Reference
 
-### Manufacturing Checklist
+### Manufacturing Checklist (Per Device)
 
-For each new device:
-
-- [ ] Flash master image to SD card
-- [ ] Run `customize_sd_card.sh` with unique values
-- [ ] First boot and SSH in
-- [ ] Set password: `echo 'counter:PASSWORD' | sudo chpasswd`
-- [ ] Set hostname: `sudo hostnamectl set-hostname T0001`
-- [ ] Reboot: `sudo reboot`
-- [ ] Verify: `sudo systemctl status crowdcount-main`
-- [ ] Label device with hostname
+- [ ] Insert SD card into Mac
+- [ ] Run `./manufacturing/flash_device.sh`
+- [ ] Enter device credentials when prompted
+- [ ] Wait for flash + eject (~2 min)
+- [ ] Insert SD card into Pi, power on
+- [ ] Stick QR code label on device
+- [ ] (Optional) Verify via SSH
 
 ### Naming Convention
 
@@ -316,11 +259,25 @@ DEVICE_ID=T0001
 DEVICE_SECRET=mysecret123
 DEVICE_PASSWORD=mypassword123
 API_PASSWORD=myapipass123
-MANUFACTURING_DATE=2024-12-09
+MANUFACTURING_DATE=2025-01-15
 MODEL=counter-v2
+HARDWARE_VERSION=1.0
+FIRMWARE_VERSION=1.0
+SERIAL_NUMBER=SN20250115T0001
 ```
 
-**This file survives OS reflashes** - it's on the boot partition.
+This file is on the boot partition and survives OS reflashes.
+
+### Files Overview
+
+| File | Where It Runs | Purpose |
+|------|---------------|---------|
+| `manufacturing/flash_device.sh` | Your Mac | One-command flash + identity stamp + QR |
+| `manufacturing/customize_sd_card.sh` | Your Mac | Standalone identity writer (used by flash_device.sh internally or solo) |
+| `manufacturing/generate_qr_from_identity.sh` | Your Mac | Standalone QR generator |
+| `crowdcount-firstboot.py` | Pi (first boot) | Auto-sets hostname + password from identity file |
+| `crowdcount-firstboot.service` | Pi (systemd) | Runs firstboot.py once before main service |
+| `install_firstboot_service.sh` | Pi (setup) | Installs the firstboot systemd service |
 
 ---
 
@@ -332,66 +289,63 @@ MODEL=counter-v2
 2. Check power supply (5V 2.5A minimum)
 3. Try re-flashing the SD card
 
+### Hostname Not Set After Boot
+
+```bash
+# Check firstboot service
+sudo journalctl -u crowdcount-firstboot
+
+# Check if identity file exists
+cat /boot/firmware/device-identity.conf
+
+# Check if marker was created prematurely
+ls -la /boot/firmware/.firstboot-done
+
+# To re-run firstboot:
+sudo rm /boot/firmware/.firstboot-done
+sudo systemctl restart crowdcount-firstboot
+```
+
 ### Can't SSH Into Device
 
 ```bash
-# Check if device is on network
-ping crowdcount-base.local  # or T0001.local after setup
+# Try the original hostname (if firstboot didn't run)
+ssh counter@crowdcount-base.local
 
-# Check your WiFi credentials in Raspberry Pi Imager settings
-# Try connecting monitor/keyboard directly
+# Or try by IP
+ping crowdcount-base.local
 ```
 
 ### Service Not Running
 
 ```bash
-# Check status
 sudo systemctl status crowdcount-main
-
-# View logs
 sudo journalctl -u crowdcount-main -f
-
-# Common fixes:
 sudo systemctl restart crowdcount-main
 ```
 
 ### Camera Not Detected
 
 ```bash
-# Check camera connection
 libcamera-hello --timeout 5000
-
-# Check kernel messages
 dmesg | grep -i camera
-
-# Verify camera is enabled
-sudo raspi-config  # Interface Options > Camera
 ```
 
-### Tailscale Not Connecting
+### Auto-Updater Can't Pull (Deploy Key)
 
 ```bash
-# Check Tailscale status
-tailscale status
+# Test SSH to GitHub
+ssh -T git@github.com
 
-# Re-authenticate manually
-sudo tailscale up
+# Check key exists
+ls -la /home/counter/.ssh/crowdcount_deploy
 
-# Check auth key in device-info.conf
-cat /home/counter/crowdcount-counter/src/counter-stream/device-info.conf | grep TAILSCALE
-```
+# Check SSH config
+cat /home/counter/.ssh/config
 
-### Stream Not Showing on Server
-
-```bash
-# Check if stream is running
-sudo journalctl -u crowdcount-main -f
-
-# Verify server IP
-cat /home/counter/crowdcount-counter/src/counter-stream/device-info.conf | grep SERVER_IP
-
-# Test network connectivity
-ping <SERVER_IP>
+# Manual pull test
+cd /home/counter/crowdcount-counter
+git fetch origin main
 ```
 
 ### Reset Device to Re-Provision
@@ -400,7 +354,9 @@ ping <SERVER_IP>
 # Remove provisioning flag
 sudo rm /boot/firmware/provisioned
 
-# Reboot - device will enter provisioning mode
+# To re-run firstboot (re-apply hostname/password)
+sudo rm /boot/firmware/.firstboot-done
+
 sudo reboot
 ```
 
@@ -408,94 +364,59 @@ sudo reboot
 
 ## Part 5: Updating Deployed Devices
 
-### Software Update (SSH)
+### Automatic Updates (Deploy Key)
+
+The `crowdcount-updater` service runs automatically and will:
+- Check for git updates periodically
+- Pull new code and restart `crowdcount-main` if updated
+- Works because the deploy key is baked into the master image
+
+### Manual Update via SSH
 
 ```bash
 ssh counter@T0001
-
 cd ~/crowdcount-counter
 git pull
-
-# Reinstall service if needed
-sudo ./install_main_service.sh
-
+sudo ./install_main_service.sh  # if service file changed
 sudo reboot
 ```
 
 ### Full OS Reflash (Preserves Identity)
 
-The device identity file is on the boot partition, so it survives reflashing:
+The identity file is on the boot partition, so it survives reflashing:
 
 ```bash
-# Flash new master image
-gunzip -c crowdcount-master-v2.img.gz | sudo dd of=/dev/sdX bs=4M
-
-# Device identity is preserved - no need to reconfigure!
+# Re-flash with new master image
+./manufacturing/flash_device.sh
+# The script will write a fresh identity file
 ```
 
 ---
 
-## Part 6: Batch Manufacturing
-
-For manufacturing multiple devices at once:
-
-```bash
-#!/bin/bash
-# batch_manufacture.sh
-
-for i in {1..10}; do
-    DEVICE_ID=$(printf "T%04d" $i)
-    SECRET="secret${i}"
-    PASS="counter${i}"
-    API="apipass${i}"
-
-    echo "=== Manufacturing $DEVICE_ID ==="
-    echo "Insert SD card and press Enter..."
-    read
-
-    # Flash
-    gunzip -c crowdcount-master.img.gz | sudo dd of=/dev/sdb bs=4M status=progress
-
-    # Customize
-    ./customize_sd_card.sh /dev/sdb $DEVICE_ID $SECRET $PASS $API
-
-    # Eject
-    sudo eject /dev/sdb
-
-    echo "Done! Label device: $DEVICE_ID"
-    echo ""
-done
-```
-
----
-
-## Part 7: Useful Commands
+## Part 6: Useful Commands
 
 ```bash
 # Service management
 sudo systemctl status crowdcount-main
-sudo systemctl restart crowdcount-main
-sudo systemctl stop crowdcount-main
+sudo systemctl status crowdcount-firstboot
+sudo systemctl status crowdcount-updater
 
 # View logs
-sudo journalctl -u crowdcount-main -f      # Live logs
-sudo journalctl -u crowdcount-main -n 100  # Last 100 lines
+sudo journalctl -u crowdcount-main -f
+sudo journalctl -u crowdcount-firstboot
+sudo journalctl -u crowdcount-updater -n 50
 
 # Check device identity
 cat /boot/firmware/device-identity.conf
 
-# Check Tailscale
+# Tailscale
 tailscale status
 tailscale ip
 
-# Test camera
+# Camera
 libcamera-hello --timeout 5000
 
-# Manual stream test
-cd ~/crowdcount-counter/src/counter-stream
-./start_stream.sh
-
-# Network status
+# Network
 nmcli device status
 ip addr
 ```

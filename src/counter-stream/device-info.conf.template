@@ -28,4 +28,4 @@ API_URL=https://api.crowdcount.tech
 # Note: Key expiry (90 days) only prevents NEW authentications
 #       Already-authenticated devices continue working indefinitely
 # When key expires, generate new one at: https://login.tailscale.com/admin/settings/keys
-TAILSCALE_AUTH_KEY=tskey-auth-k24oPPsZWg11CNTRL-AQ41WXnhW5eTyyNK8DaC5ezEe5ZkYNri4
+TAILSCALE_AUTH_KEY=tskey-auth-kJKxfwtXQG11CNTRL-LFr48oKos5WDkXDsw9qA6WZUB6wMzMzPE

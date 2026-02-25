@@ -1,0 +1,16 @@
+[Unit]
+Description=CrowdCount First-Boot Configuration (hostname + password)
+Before=crowdcount-main.service
+After=local-fs.target
+ConditionPathExists=!/boot/firmware/.firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/counter/crowdcount-counter/crowdcount-firstboot.py
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
