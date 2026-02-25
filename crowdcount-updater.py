@@ -251,28 +251,34 @@ def main() -> None:
     # Report current version immediately on startup
     commit = get_current_commit()
     logger.info("Current version: %s", commit[:8])
+
+    # Wait for network before attempting git operations.
+    # On fresh devices, WiFi may take minutes (saved creds or Bluetooth provisioning).
+    NETWORK_CHECK_INTERVAL = 30  # seconds between checks
+    NETWORK_MAX_WAIT = 60 * 60  # wait up to 1 hour for network
+    waited = 0
+    while waited < NETWORK_MAX_WAIT:
+        try:
+            import socket
+            socket.create_connection(("github.com", 443), timeout=5).close()
+            logger.info("Network is up — can reach GitHub")
+            break
+        except OSError:
+            if waited == 0:
+                logger.info("Waiting for network connectivity...")
+            time.sleep(NETWORK_CHECK_INTERVAL)
+            waited += NETWORK_CHECK_INTERVAL
+    else:
+        logger.warning("No network after %d minutes — will keep trying in background",
+                        NETWORK_MAX_WAIT // 60)
+
     report_version(device_id, password, commit)
 
-    # Check for updates immediately on startup, retry quickly if it fails
-    # (network may not be ready yet on fresh boot)
-    BOOT_RETRY_INTERVAL = 5 * 60  # 5 minutes
-    BOOT_MAX_RETRIES = 6  # try for up to 30 minutes
-    initial_success = False
-
-    for attempt in range(BOOT_MAX_RETRIES):
-        try:
-            check_and_update(device_id, password)
-            initial_success = True
-            break
-        except Exception as exc:
-            logger.warning("Boot update check failed (attempt %d/%d): %s",
-                           attempt + 1, BOOT_MAX_RETRIES, exc)
-            if attempt < BOOT_MAX_RETRIES - 1:
-                logger.info("Retrying in %d seconds...", BOOT_RETRY_INTERVAL)
-                time.sleep(BOOT_RETRY_INTERVAL)
-
-    if not initial_success:
-        logger.error("All boot update attempts failed — will retry in normal cycle")
+    # Check for updates now that network is (likely) up
+    try:
+        check_and_update(device_id, password)
+    except Exception as exc:
+        logger.warning("Boot update check failed: %s", exc)
 
     # Then check periodically
     while True:
