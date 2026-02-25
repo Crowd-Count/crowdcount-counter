@@ -134,10 +134,32 @@ if command -v tailscale &> /dev/null; then
     sudo systemctl start tailscaled
     echo "✓ Tailscale service enabled and started"
     echo ""
-    echo "⚠ NOTE: You need to authenticate Tailscale with:"
-    echo "   sudo tailscale up"
-    echo ""
-    echo "Or if you want to authenticate later, it will be done during first boot."
+    # Try to enable Tailscale SSH and disable regular SSH
+    # Only proceed if Tailscale is authenticated and SSH setting succeeds
+    echo "Checking if Tailscale is authenticated..."
+    if sudo tailscale status &> /dev/null; then
+        echo "✓ Tailscale is authenticated"
+        echo ""
+        echo "Enabling Tailscale SSH..."
+        if sudo tailscale set --ssh; then
+            echo "✓ Tailscale SSH enabled"
+            echo ""
+            echo "Disabling regular SSH (security: no local WiFi access)..."
+            sudo systemctl stop ssh
+            sudo systemctl disable ssh
+            sudo systemctl mask ssh
+            echo "✓ Regular SSH disabled — only Tailscale SSH available"
+        else
+            echo "⚠ Failed to enable Tailscale SSH — keeping regular SSH enabled"
+        fi
+    else
+        echo "⚠ Tailscale not authenticated yet — keeping regular SSH enabled"
+        echo ""
+        echo "To switch to Tailscale-only SSH later, run:"
+        echo "   sudo tailscale up --authkey YOUR_AUTH_KEY"
+        echo "   sudo tailscale set --ssh"
+        echo "   sudo systemctl stop ssh && sudo systemctl disable ssh && sudo systemctl mask ssh"
+    fi
 else
     echo "⚠ Tailscale not installed, skipping"
 fi
