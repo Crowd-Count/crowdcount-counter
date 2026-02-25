@@ -35,6 +35,17 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
+# Pull latest code before doing anything else
+echo "============================================================"
+echo "Step 0/10: Pulling latest code..."
+echo "============================================================"
+if [ -d "$SCRIPT_DIR/.git" ]; then
+    git -C "$SCRIPT_DIR" pull origin main || echo "⚠ Git pull failed — continuing with current code"
+else
+    echo "⚠ Not a git repo — skipping pull"
+fi
+echo ""
+
 # Update package list
 echo "============================================================"
 echo "Step 1/10: Updating package list..."
