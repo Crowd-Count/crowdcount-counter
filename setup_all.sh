@@ -134,31 +134,19 @@ if command -v tailscale &> /dev/null; then
     sudo systemctl start tailscaled
     echo "✓ Tailscale service enabled and started"
     echo ""
-    # Try to enable Tailscale SSH and disable regular SSH
-    # Only proceed if Tailscale is authenticated and SSH setting succeeds
+    # Enable Tailscale SSH if authenticated (additive — does NOT disable regular SSH)
+    # NOTE: Regular SSH is intentionally left enabled in the master image.
+    # SSH hardening (disabling regular SSH) happens at runtime in crowdcount-main.py
+    # AFTER Tailscale authentication succeeds on each individual device.
+    # This ensures devices always have SSH fallback access if Tailscale auth fails.
     echo "Checking if Tailscale is authenticated..."
     if sudo tailscale status &> /dev/null; then
         echo "✓ Tailscale is authenticated"
-        echo ""
         echo "Enabling Tailscale SSH..."
-        if sudo tailscale set --ssh; then
-            echo "✓ Tailscale SSH enabled"
-            echo ""
-            echo "Disabling regular SSH (security: no local WiFi access)..."
-            sudo systemctl stop ssh
-            sudo systemctl disable ssh
-            sudo systemctl mask ssh
-            echo "✓ Regular SSH disabled — only Tailscale SSH available"
-        else
-            echo "⚠ Failed to enable Tailscale SSH — keeping regular SSH enabled"
-        fi
+        sudo tailscale set --ssh || echo "⚠ Failed to enable Tailscale SSH"
+        echo "✓ Tailscale SSH enabled (regular SSH stays enabled in master image)"
     else
-        echo "⚠ Tailscale not authenticated yet — keeping regular SSH enabled"
-        echo ""
-        echo "To switch to Tailscale-only SSH later, run:"
-        echo "   sudo tailscale up --authkey YOUR_AUTH_KEY"
-        echo "   sudo tailscale set --ssh"
-        echo "   sudo systemctl stop ssh && sudo systemctl disable ssh && sudo systemctl mask ssh"
+        echo "⚠ Tailscale not authenticated yet — Tailscale SSH will be enabled at runtime"
     fi
 else
     echo "⚠ Tailscale not installed, skipping"

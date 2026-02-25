@@ -62,14 +62,42 @@ def set_hostname(hostname):
         log.warning("Could not update /etc/hosts: %s", e)
 
 
-def set_tailscale_hostname(hostname):
-    log.info("Setting Tailscale hostname to: %s", hostname)
+def reset_tailscale_identity():
+    """Reset Tailscale node identity so this cloned device registers as a new node.
+
+    The master image has Tailscale authenticated with its own node key.
+    Every clone shares that key — Tailscale thinks they're all the same machine.
+    Only the last one to connect stays online. Logging out clears the node key
+    so crowdcount-main.py can do a fresh `tailscale up` and get a unique identity.
+    """
+    log.info("Resetting Tailscale identity (cloned image → new node)...")
     try:
-        subprocess.run(["tailscale", "set", "--hostname", hostname], check=True)
+        # Stop tailscaled so we can safely clear state
+        subprocess.run(["systemctl", "stop", "tailscaled"], capture_output=True, timeout=10)
+
+        # Remove all Tailscale state — node keys, machine keys, cached certs
+        import shutil
+        ts_state = "/var/lib/tailscale"
+        if os.path.isdir(ts_state):
+            for entry in os.listdir(ts_state):
+                entry_path = os.path.join(ts_state, entry)
+                try:
+                    if os.path.isfile(entry_path):
+                        os.remove(entry_path)
+                    elif os.path.isdir(entry_path):
+                        shutil.rmtree(entry_path)
+                except Exception as e:
+                    log.warning("Could not remove %s: %s", entry_path, e)
+            log.info("Cleared Tailscale state directory")
+
+        # Restart tailscaled with fresh state
+        subprocess.run(["systemctl", "start", "tailscaled"], capture_output=True, timeout=10)
+        log.info("Tailscale identity reset complete — will re-authenticate in crowdcount-main")
+
     except FileNotFoundError:
-        log.warning("tailscale command not found — skipping Tailscale hostname")
+        log.warning("tailscale/systemctl not found — skipping Tailscale reset")
     except Exception as e:
-        log.warning("Could not set Tailscale hostname: %s", e)
+        log.warning("Could not reset Tailscale identity: %s", e)
 
 
 def setup_root_ssh_keys():
@@ -155,6 +183,12 @@ def main():
         log.error("DEVICE_ID not found in identity file.")
         return 1
 
+    # Reset Tailscale identity so this device registers as a NEW node.
+    # The master image has Tailscale authenticated — all clones share the same
+    # node key in /var/lib/tailscale/. Without this reset, only the last device
+    # to boot would work (Tailscale sees them as the same machine).
+    reset_tailscale_identity()
+
     # Set hostname (OS + Tailscale)
     try:
         set_hostname(device_id)
@@ -162,8 +196,6 @@ def main():
     except Exception as e:
         log.error("Failed to set hostname: %s", e)
         return 1
-
-    set_tailscale_hostname(device_id)
 
     # Copy SSH keys to root for updater service
     setup_root_ssh_keys()

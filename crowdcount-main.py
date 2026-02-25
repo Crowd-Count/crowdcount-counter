@@ -43,6 +43,9 @@ IDENTITY_PATHS = [
     Path('/boot/device-identity.conf'),
 ]
 
+# Marker file: once SSH is hardened, don't repeat on every boot
+SSH_HARDENED_MARKER = Path('/boot/firmware/.ssh-hardened')
+
 
 class CrowdCountMain:
     """Main orchestrator for CrowdCount device"""
@@ -211,6 +214,53 @@ class CrowdCountMain:
         except Exception as e:
             print(f"✗ Error authenticating Tailscale: {e}")
             return False
+
+    def harden_ssh(self):
+        """Disable regular SSH after confirming Tailscale SSH works.
+
+        Only runs once (uses marker file). If Tailscale auth failed,
+        this method should not be called — regular SSH stays as fallback.
+        """
+        if SSH_HARDENED_MARKER.exists():
+            return  # Already hardened on a previous boot
+
+        try:
+            # Enable Tailscale SSH
+            result = subprocess.run(
+                ['sudo', 'tailscale', 'set', '--ssh'],
+                capture_output=True, timeout=10, text=True
+            )
+            if result.returncode != 0:
+                print(f"⚠ Failed to enable Tailscale SSH, keeping regular SSH: {result.stderr}")
+                return
+
+            print("✓ Tailscale SSH enabled")
+
+            # Disable regular SSH
+            for cmd in [
+                ['sudo', 'systemctl', 'stop', 'ssh'],
+                ['sudo', 'systemctl', 'disable', 'ssh'],
+                ['sudo', 'systemctl', 'mask', 'ssh'],
+            ]:
+                subprocess.run(cmd, capture_output=True, timeout=10)
+
+            print("✓ Regular SSH disabled — only Tailscale SSH available")
+
+            # Write marker so we don't repeat this on every boot
+            try:
+                SSH_HARDENED_MARKER.write_text(
+                    f"SSH hardened on {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+            except PermissionError:
+                subprocess.run(
+                    ['sudo', 'bash', '-c', f'echo "SSH hardened on $(date)" > {SSH_HARDENED_MARKER}'],
+                    capture_output=True, timeout=5
+                )
+
+            print(f"✓ Marker written: {SSH_HARDENED_MARKER}")
+
+        except Exception as e:
+            print(f"⚠ SSH hardening failed (regular SSH still available): {e}")
 
     def check_wifi_connected(self):
         """Check if WiFi is currently connected using multiple methods"""
@@ -583,7 +633,14 @@ class CrowdCountMain:
 
         # Authenticate Tailscale on startup (if not already authenticated)
         print("Checking Tailscale authentication...")
-        self.authenticate_tailscale()
+        tailscale_ok = self.authenticate_tailscale()
+
+        # Harden SSH only after Tailscale auth is confirmed working on THIS device.
+        # If Tailscale auth fails, regular SSH stays enabled as fallback access.
+        if tailscale_ok:
+            self.harden_ssh()
+        else:
+            print("⚠ Tailscale not authenticated — keeping regular SSH enabled as fallback")
         print()
 
         version_reported = False

@@ -8,7 +8,7 @@
 #   ./manufacturing/flash_device.sh --image /path/to/crowdcount-master.img.gz
 #
 
-set -e
+set -eo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -69,28 +69,50 @@ echo ""
 # ─────────────────────────────────────────────────────────────
 echo -e "${CYAN}[2/7] Device credentials${NC}"
 echo ""
+echo "  Paste a line from the spreadsheet (tab-separated):"
+echo "  Format: DEVICE_ID  API_PASSWORD  counter  DEVICE_PASSWORD  DEVICE_SECRET"
+echo ""
+echo "  Or type 'manual' to enter each field individually."
+echo ""
+read -rp "  > " PASTE_INPUT
 
-read -rp "  Device ID (e.g. T0005): " DEVICE_ID
+if [ "$PASTE_INPUT" = "manual" ]; then
+    read -rp "  Device ID (e.g. T0005): " DEVICE_ID
+    read -rp "  Device secret (Bluetooth pairing): " DEVICE_SECRET
+    read -rsp "  Device password (SSH): " DEVICE_PASSWORD
+    echo ""
+    read -rsp "  API password: " API_PASSWORD
+    echo ""
+else
+    # Parse tab-separated or multi-space-separated spreadsheet line
+    # Columns: DEVICE_ID, API_PASSWORD, username (skip), DEVICE_PASSWORD, DEVICE_SECRET
+    DEVICE_ID=$(echo "$PASTE_INPUT" | awk -F'\t' '{print $1}' | xargs)
+    API_PASSWORD=$(echo "$PASTE_INPUT" | awk -F'\t' '{print $2}' | xargs)
+    # Column 3 is username ("counter") — skip
+    DEVICE_PASSWORD=$(echo "$PASTE_INPUT" | awk -F'\t' '{print $4}' | xargs)
+    DEVICE_SECRET=$(echo "$PASTE_INPUT" | awk -F'\t' '{print $5}' | xargs)
+
+    # If tab parsing didn't work (no tabs), try whitespace
+    if [ -z "$DEVICE_SECRET" ]; then
+        DEVICE_ID=$(echo "$PASTE_INPUT" | awk '{print $1}')
+        API_PASSWORD=$(echo "$PASTE_INPUT" | awk '{print $2}')
+        DEVICE_PASSWORD=$(echo "$PASTE_INPUT" | awk '{print $4}')
+        DEVICE_SECRET=$(echo "$PASTE_INPUT" | awk '{print $5}')
+    fi
+fi
+
 if [ -z "$DEVICE_ID" ]; then
     echo -e "${RED}Device ID is required.${NC}"
     exit 1
 fi
-
-read -rp "  Device secret (Bluetooth pairing): " DEVICE_SECRET
 if [ -z "$DEVICE_SECRET" ]; then
     echo -e "${RED}Device secret is required.${NC}"
     exit 1
 fi
-
-read -rsp "  Device password (SSH): " DEVICE_PASSWORD
-echo ""
 if [ -z "$DEVICE_PASSWORD" ]; then
     echo -e "${RED}Device password is required.${NC}"
     exit 1
 fi
-
-read -rsp "  API password: " API_PASSWORD
-echo ""
 if [ -z "$API_PASSWORD" ]; then
     echo -e "${RED}API password is required.${NC}"
     exit 1
@@ -159,12 +181,36 @@ echo "Writing image (this takes ~2 minutes)..."
 echo "Using raw device $RAW_DEVICE for speed..."
 echo ""
 
-# Use gzip -dc to decompress and dd to write. bs=4m for macOS.
-gzip -dc "$IMAGE_PATH" | sudo dd of="$RAW_DEVICE" bs=4m status=progress 2>&1
+# Detect compressed vs uncompressed image and flash accordingly
+# Capture dd stderr (which contains transfer stats) to verify bytes were written
+DD_OUTPUT_FILE=$(mktemp)
+
+if [[ "$IMAGE_PATH" == *.gz ]]; then
+    gzip -dc "$IMAGE_PATH" | sudo dd of="$RAW_DEVICE" bs=4m status=progress 2> >(tee "$DD_OUTPUT_FILE" >&2)
+    DD_EXIT=$?
+else
+    sudo dd if="$IMAGE_PATH" of="$RAW_DEVICE" bs=4m status=progress 2> >(tee "$DD_OUTPUT_FILE" >&2)
+    DD_EXIT=$?
+fi
+
+if [ $DD_EXIT -ne 0 ]; then
+    echo -e "${RED}dd failed with exit code $DD_EXIT${NC}"
+    rm -f "$DD_OUTPUT_FILE"
+    exit 1
+fi
+
+# Verify bytes were actually written (dd can "succeed" with 0 bytes transferred)
+BYTES_WRITTEN=$(grep -o '[0-9]* bytes' "$DD_OUTPUT_FILE" | head -1 | awk '{print $1}')
+rm -f "$DD_OUTPUT_FILE"
+
+if [ -z "$BYTES_WRITTEN" ] || [ "$BYTES_WRITTEN" -eq 0 ] 2>/dev/null; then
+    echo -e "${RED}Flash failed: 0 bytes transferred. Check that the SD card is not write-protected.${NC}"
+    exit 1
+fi
 
 sync
 echo ""
-echo -e "${GREEN}Flash complete.${NC}"
+echo -e "${GREEN}Flash complete ($BYTES_WRITTEN bytes written).${NC}"
 
 # ─────────────────────────────────────────────────────────────
 # Step 5: Mount boot partition & write identity
@@ -173,11 +219,28 @@ echo ""
 echo -e "${CYAN}[5/7] Stamping device identity...${NC}"
 echo ""
 
-# Give macOS a moment to detect partitions
-sleep 2
-
 # On a freshly flashed Pi image, the boot partition is partition 1
 BOOT_PARTITION="${DEVICE}s1"
+
+# Wait for macOS to detect partitions (can take several seconds after dd)
+echo "Waiting for boot partition to appear..."
+PARTITION_WAIT=0
+PARTITION_MAX_WAIT=15
+while [ $PARTITION_WAIT -lt $PARTITION_MAX_WAIT ]; do
+    if diskutil info "$BOOT_PARTITION" &>/dev/null; then
+        echo -e "${GREEN}Partition detected after ${PARTITION_WAIT}s${NC}"
+        break
+    fi
+    sleep 1
+    PARTITION_WAIT=$((PARTITION_WAIT + 1))
+    echo "  Waiting... (${PARTITION_WAIT}/${PARTITION_MAX_WAIT}s)"
+done
+
+if ! diskutil info "$BOOT_PARTITION" &>/dev/null; then
+    echo -e "${RED}Boot partition $BOOT_PARTITION not detected after ${PARTITION_MAX_WAIT}s.${NC}"
+    echo "The SD card may have a corrupt partition table. Try re-flashing."
+    exit 1
+fi
 
 # Try to mount it — macOS may auto-mount after dd
 echo "Mounting boot partition ($BOOT_PARTITION)..."
@@ -228,8 +291,21 @@ EOF
 
 echo -e "${GREEN}Wrote: $IDENTITY_FILE${NC}"
 
-# Remove any stale firstboot marker so firstboot runs on this card
+# Verify identity file was written correctly by reading it back
+sync
+READBACK_DEVICE_ID=$(grep "^DEVICE_ID=" "$IDENTITY_FILE" 2>/dev/null | cut -d= -f2)
+if [ "$READBACK_DEVICE_ID" != "$DEVICE_ID" ]; then
+    echo -e "${RED}VERIFICATION FAILED: Identity file readback doesn't match.${NC}"
+    echo "  Expected DEVICE_ID=$DEVICE_ID"
+    echo "  Got DEVICE_ID=$READBACK_DEVICE_ID"
+    echo "The SD card may be faulty. Try a different card."
+    exit 1
+fi
+echo -e "${GREEN}Verified: identity file readback matches.${NC}"
+
+# Remove stale markers so firstboot and SSH hardening run on this card
 rm -f "$MOUNT_POINT/.firstboot-done" 2>/dev/null || true
+rm -f "$MOUNT_POINT/.ssh-hardened" 2>/dev/null || true
 
 echo ""
 echo "Identity file contents:"
