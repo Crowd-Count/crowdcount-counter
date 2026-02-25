@@ -72,6 +72,47 @@ def set_tailscale_hostname(hostname):
         log.warning("Could not set Tailscale hostname: %s", e)
 
 
+def setup_root_ssh_keys():
+    """Copy counter user's SSH keys to root so the updater service (which runs as root) can git pull."""
+    root_ssh_dir = "/root/.ssh"
+    counter_ssh_dir = "/home/counter/.ssh"
+
+    os.makedirs(root_ssh_dir, mode=0o700, exist_ok=True)
+
+    # Copy deploy key
+    deploy_key = os.path.join(counter_ssh_dir, "crowdcount_deploy")
+    if os.path.isfile(deploy_key):
+        import shutil
+        shutil.copy2(deploy_key, os.path.join(root_ssh_dir, "crowdcount_deploy"))
+        os.chmod(os.path.join(root_ssh_dir, "crowdcount_deploy"), 0o600)
+        log.info("Copied deploy key to root")
+    else:
+        log.warning("No deploy key found at %s", deploy_key)
+        return
+
+    # Copy SSH config
+    ssh_config = os.path.join(counter_ssh_dir, "config")
+    if os.path.isfile(ssh_config):
+        shutil.copy2(ssh_config, os.path.join(root_ssh_dir, "config"))
+        os.chmod(os.path.join(root_ssh_dir, "config"), 0o600)
+        log.info("Copied SSH config to root")
+
+    # Add GitHub to known_hosts
+    known_hosts = os.path.join(root_ssh_dir, "known_hosts")
+    try:
+        result = subprocess.run(
+            ["ssh-keyscan", "github.com"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.stdout:
+            with open(known_hosts, "a") as f:
+                f.write(result.stdout)
+            os.chmod(known_hosts, 0o600)
+            log.info("Added GitHub to root known_hosts")
+    except Exception as e:
+        log.warning("Could not scan GitHub host keys: %s", e)
+
+
 def set_password(username, password):
     log.info("Setting password for user: %s", username)
     proc = subprocess.run(
@@ -123,6 +164,9 @@ def main():
         return 1
 
     set_tailscale_hostname(device_id)
+
+    # Copy SSH keys to root for updater service
+    setup_root_ssh_keys()
 
     # Set password
     if device_password:
