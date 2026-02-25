@@ -253,11 +253,26 @@ def main() -> None:
     logger.info("Current version: %s", commit[:8])
     report_version(device_id, password, commit)
 
-    # Check for updates immediately on startup
-    try:
-        check_and_update(device_id, password)
-    except Exception as exc:
-        logger.error("Initial update check failed: %s", exc)
+    # Check for updates immediately on startup, retry quickly if it fails
+    # (network may not be ready yet on fresh boot)
+    BOOT_RETRY_INTERVAL = 5 * 60  # 5 minutes
+    BOOT_MAX_RETRIES = 6  # try for up to 30 minutes
+    initial_success = False
+
+    for attempt in range(BOOT_MAX_RETRIES):
+        try:
+            check_and_update(device_id, password)
+            initial_success = True
+            break
+        except Exception as exc:
+            logger.warning("Boot update check failed (attempt %d/%d): %s",
+                           attempt + 1, BOOT_MAX_RETRIES, exc)
+            if attempt < BOOT_MAX_RETRIES - 1:
+                logger.info("Retrying in %d seconds...", BOOT_RETRY_INTERVAL)
+                time.sleep(BOOT_RETRY_INTERVAL)
+
+    if not initial_success:
+        logger.error("All boot update attempts failed — will retry in normal cycle")
 
     # Then check periodically
     while True:

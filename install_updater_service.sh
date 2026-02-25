@@ -65,7 +65,7 @@ echo "Step 2/4: Installing systemd service..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=CrowdCount Auto-Updater (git pull + version reporting)
-After=network-online.target
+After=network-online.target crowdcount-firstboot.service
 Wants=network-online.target
 
 [Service]
@@ -81,8 +81,8 @@ StandardError=journal
 # Environment
 Environment=PYTHONUNBUFFERED=1
 
-# Allow time for network to come up
-ExecStartPre=/bin/sleep 10
+# Allow time for network + firstboot SSH key setup
+ExecStartPre=/bin/sleep 15
 
 [Install]
 WantedBy=multi-user.target
