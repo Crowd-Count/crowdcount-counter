@@ -27,7 +27,7 @@ class DeviceIdentity:
         self.device_id = None
         self.device_secret = None
         self.manufacturing_date = None
-        self.model = "counter-v2"
+        self.model = "counter-v3"
         self._load_identity()
 
     def _load_identity(self):
@@ -60,7 +60,7 @@ class DeviceIdentity:
             self.device_id = section.get('DEVICE_ID', 'CC-UNKNOWN')
             self.device_secret = section.get('DEVICE_SECRET', '')
             self.manufacturing_date = section.get('MANUFACTURING_DATE', 'unknown')
-            self.model = section.get('MODEL', 'counter-v2')
+            self.model = section.get('MODEL', 'counter-v3')
 
             # Validate device_id format (should be alphanumeric with dashes)
             if not self.device_id or len(self.device_id) > 32:

@@ -190,7 +190,7 @@ if [ "$IDENTITY_FOUND" = false ]; then
     echo "  DEVICE_ID=CC-001"
     echo "  DEVICE_SECRET=your-random-secret"
     echo "  MANUFACTURING_DATE=$(date +%Y-%m-%d)"
-    echo "  MODEL=counter-v2"
+    echo "  MODEL=counter-v3"
     echo ""
     echo "For development, the system will use default values."
 fi

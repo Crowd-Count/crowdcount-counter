@@ -93,7 +93,7 @@ if [ "$IDENTITY_FOUND" = false ]; then
     echo "  DEVICE_ID=CC-DEV-001"
     echo "  DEVICE_SECRET=development-secret"
     echo "  MANUFACTURING_DATE=$(date +%Y-%m-%d)"
-    echo "  MODEL=counter-v2"
+    echo "  MODEL=counter-v3"
     echo ""
 fi
 

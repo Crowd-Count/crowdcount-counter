@@ -62,6 +62,16 @@ def set_hostname(hostname):
         log.warning("Could not update /etc/hosts: %s", e)
 
 
+def set_tailscale_hostname(hostname):
+    log.info("Setting Tailscale hostname to: %s", hostname)
+    try:
+        subprocess.run(["tailscale", "set", "--hostname", hostname], check=True)
+    except FileNotFoundError:
+        log.warning("tailscale command not found — skipping Tailscale hostname")
+    except Exception as e:
+        log.warning("Could not set Tailscale hostname: %s", e)
+
+
 def set_password(username, password):
     log.info("Setting password for user: %s", username)
     proc = subprocess.run(
@@ -104,13 +114,15 @@ def main():
         log.error("DEVICE_ID not found in identity file.")
         return 1
 
-    # Set hostname
+    # Set hostname (OS + Tailscale)
     try:
         set_hostname(device_id)
         log.info("Hostname set to: %s", device_id)
     except Exception as e:
         log.error("Failed to set hostname: %s", e)
         return 1
+
+    set_tailscale_hostname(device_id)
 
     # Set password
     if device_password:

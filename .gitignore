@@ -1,6 +1,11 @@
 # Device-specific configuration files
 src/counter-stream/device-info.conf
 
+# Master image (large binary, ~2GB+)
+crowdcount-master.img.gz
+*.img
+*.img.gz
+
 # Log files
 *.log
 logs/
