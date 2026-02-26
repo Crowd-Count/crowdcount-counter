@@ -6,6 +6,8 @@
 
 set -e  # Exit on error
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 echo "============================================================"
 echo "CrowdCount Counter - Complete Setup"
 echo "Raspberry Pi Zero 2W + Global Shutter Camera"
@@ -114,7 +116,6 @@ echo "============================================================"
 
 sudo apt install -y python3-pip
 # Check if requirements.txt exists
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     echo "Installing from requirements.txt..."
     echo "Note: Heavy packages (picamera2, dbus, pygobject) already installed via apt"
