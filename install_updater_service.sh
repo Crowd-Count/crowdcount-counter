@@ -75,6 +75,7 @@ WorkingDirectory=$SCRIPT_DIR
 ExecStart=/usr/bin/python3 $UPDATER_SCRIPT
 Restart=always
 RestartSec=60
+StartLimitIntervalSec=0
 StandardOutput=journal
 StandardError=journal
 

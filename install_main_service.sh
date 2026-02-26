@@ -88,9 +88,8 @@ echo "  Exec Start: $MAIN_SCRIPT"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=CrowdCount Main Service (Provisioning + Streaming)
-After=network-online.target bluetooth.target tailscaled.service
-Wants=network-online.target bluetooth.target
-Requires=tailscaled.service
+After=network-online.target bluetooth.target tailscaled.service crowdcount-firstboot.service
+Wants=network-online.target bluetooth.target tailscaled.service
 
 [Service]
 Type=simple
@@ -101,6 +100,9 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+
+# Never give up restarting — this is the core service
+StartLimitIntervalSec=0
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

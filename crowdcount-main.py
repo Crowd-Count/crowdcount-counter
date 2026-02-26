@@ -177,10 +177,46 @@ class CrowdCountMain:
         except Exception as e:
             print(f"⚠ Could not report version: {e}")
 
+    def ensure_tailscaled_running(self):
+        """Make sure the tailscaled daemon is running, restart it if needed."""
+        try:
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'tailscaled'],
+                capture_output=True, timeout=5, text=True
+            )
+            if result.stdout.strip() == 'active':
+                return True
+
+            print("⚠ tailscaled is not running, attempting restart...")
+            subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'tailscaled'],
+                capture_output=True, timeout=15
+            )
+            time.sleep(2)
+
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'tailscaled'],
+                capture_output=True, timeout=5, text=True
+            )
+            if result.stdout.strip() == 'active':
+                print("✓ tailscaled restarted successfully")
+                return True
+            else:
+                print("✗ tailscaled failed to restart")
+                return False
+        except Exception as e:
+            print(f"✗ Error checking tailscaled: {e}")
+            return False
+
     def authenticate_tailscale(self):
         """Authenticate Tailscale with auth key and device hostname"""
         if not self.tailscale_auth_key:
             print("⚠ No Tailscale auth key configured, skipping authentication")
+            return False
+
+        # Make sure the daemon is running first
+        if not self.ensure_tailscaled_running():
+            print("⚠ Cannot authenticate — tailscaled is not running")
             return False
 
         try:
