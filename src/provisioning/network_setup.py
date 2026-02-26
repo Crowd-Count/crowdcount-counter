@@ -23,9 +23,7 @@ except ImportError:
     VIDEO_HEIGHT = 480
 
 
-FALLBACK_NETWORKS = [
-    ("Elkan's iPhone", "CrowdCountHotspot"),
-]
+FALLBACK_NETWORKS = []
 
 
 class NetworkSetup:

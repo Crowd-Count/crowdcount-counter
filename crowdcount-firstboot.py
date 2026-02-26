@@ -61,6 +61,15 @@ def set_hostname(hostname):
     except Exception as e:
         log.warning("Could not update /etc/hosts: %s", e)
 
+    # Restart NetworkManager so it re-sends the new hostname in DHCP requests.
+    # Without this, the router sees the old master image hostname.
+    try:
+        subprocess.run(["systemctl", "restart", "NetworkManager"],
+                        capture_output=True, timeout=10)
+        log.info("Restarted NetworkManager with new hostname")
+    except Exception as e:
+        log.warning("Could not restart NetworkManager: %s", e)
+
 
 def reset_tailscale_identity():
     """Reset Tailscale node identity so this cloned device registers as a new node.
@@ -182,6 +191,20 @@ def main():
     if not device_id:
         log.error("DEVICE_ID not found in identity file.")
         return 1
+
+    # Clear any WiFi credentials or provisioning state leaked from master image.
+    # Defense-in-depth: manufacturing cleanup should catch these, but firstboot
+    # catches anything missed so clones don't skip provisioning or auto-connect
+    # to the master's WiFi.
+    for stale_file in [
+        "/boot/firmware/wifi-credentials.conf",
+        "/boot/wifi-credentials.conf",
+        "/boot/firmware/provisioned",
+        "/boot/provisioned",
+    ]:
+        if os.path.isfile(stale_file):
+            os.remove(stale_file)
+            log.info("Cleared stale file from master image: %s", stale_file)
 
     # Reset Tailscale identity so this device registers as a NEW node.
     # The master image has Tailscale authenticated — all clones share the same

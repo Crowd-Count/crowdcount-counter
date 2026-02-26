@@ -56,7 +56,7 @@ echo "Step 2/4: Installing systemd service..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=CrowdCount First-Boot Configuration (hostname + password)
-Before=crowdcount-main.service
+Before=crowdcount-main.service crowdcount-updater.service NetworkManager.service
 After=local-fs.target
 ConditionPathExists=!/boot/firmware/.firstboot-done
 

@@ -158,6 +158,19 @@ git fetch origin main
 
 ```bash
 # On the Pi: clean up
+
+# Clear WiFi credentials (prevent clones auto-connecting to master's WiFi)
+sudo rm -f /boot/firmware/wifi-credentials.conf
+sudo rm -f /boot/wifi-credentials.conf
+
+# Clear NetworkManager saved connections
+sudo rm -f /etc/NetworkManager/system-connections/*
+
+# Clear provisioning and firstboot markers
+sudo rm -f /boot/firmware/.firstboot-done
+sudo rm -f /boot/firmware/.ssh-hardened
+sudo rm -f /boot/firmware/provisioned
+
 sudo apt clean
 sudo rm -rf /var/cache/apt/archives/*
 history -c

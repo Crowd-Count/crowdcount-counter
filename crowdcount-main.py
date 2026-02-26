@@ -272,7 +272,32 @@ class CrowdCountMain:
 
             print("✓ Tailscale SSH enabled")
 
-            # Disable regular SSH
+            # Verify Tailscale SSH actually works before disabling regular SSH
+            ts_ip_result = subprocess.run(
+                ['tailscale', 'ip', '-4'],
+                capture_output=True, text=True, timeout=5
+            )
+            ts_ip = ts_ip_result.stdout.strip()
+            if not ts_ip:
+                print("⚠ Cannot get Tailscale IP — keeping regular SSH")
+                return
+
+            try:
+                verify_result = subprocess.run(
+                    ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5',
+                     ts_ip, 'echo', 'tailscale-ssh-ok'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if 'tailscale-ssh-ok' not in verify_result.stdout:
+                    print("⚠ Tailscale SSH verification failed — keeping regular SSH")
+                    return
+            except subprocess.TimeoutExpired:
+                print("⚠ Tailscale SSH verification timed out — keeping regular SSH")
+                return
+
+            print("✓ Tailscale SSH verified working")
+
+            # NOW safe to disable regular SSH
             for cmd in [
                 ['sudo', 'systemctl', 'stop', 'ssh'],
                 ['sudo', 'systemctl', 'disable', 'ssh'],
@@ -428,9 +453,7 @@ class CrowdCountMain:
         Returns:
             bool: True if connected successfully
         """
-        FALLBACK_NETWORKS = [
-            ("Elkan's iPhone", "CrowdCountHotspot"),
-        ]
+        FALLBACK_NETWORKS = []
 
         # Check for saved WiFi credentials
         credential_locations = [
