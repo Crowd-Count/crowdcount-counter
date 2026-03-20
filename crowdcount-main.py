@@ -509,7 +509,8 @@ class CrowdCountMain:
                 # Connected and ready → check Tailscale, then stream
                 if not tailscale_connected:
                     print("Decision: WiFi connected but Tailscale not ready")
-                    print("Waiting for Tailscale to connect...")
+                    print("Attempting Tailscale re-authentication...")
+                    self.authenticate_tailscale()
                     time.sleep(5)
                     continue
 

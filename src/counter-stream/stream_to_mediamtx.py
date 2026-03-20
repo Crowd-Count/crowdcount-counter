@@ -809,6 +809,7 @@ class RTSPCameraStreamer:
 
         # Main connection loop with reconnection
         attempt = 0
+        server_unreachable_since = None
         while not self.shutdown_requested:
             attempt += 1
             if attempt > 1:
@@ -821,6 +822,11 @@ class RTSPCameraStreamer:
                 # This fails fast instead of letting FFmpeg hang
                 reachable, msg = self.check_server_reachable()
                 if not reachable:
+                    if server_unreachable_since is None:
+                        server_unreachable_since = time.time()
+                    elif time.time() - server_unreachable_since > 300:
+                        print(f"✗ Server unreachable for over 5 minutes, exiting to allow recovery")
+                        return False
                     print(f"✗ {msg}")
                     if self.reconnection_enabled and not self.shutdown_requested:
                         # Server unreachable - try to fetch new IP
@@ -839,6 +845,7 @@ class RTSPCameraStreamer:
                         continue
                     else:
                         return False
+                server_unreachable_since = None
                 print(f"✓ {msg}")
 
                 # Register device with server (required - validates credentials)
