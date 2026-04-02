@@ -98,6 +98,7 @@ WorkingDirectory=$SCRIPT_DIR
 ExecStart=/usr/bin/python3 $MAIN_SCRIPT
 Restart=always
 RestartSec=10
+WatchdogSec=120
 StandardOutput=journal
 StandardError=journal
 

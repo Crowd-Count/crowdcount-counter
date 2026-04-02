@@ -865,8 +865,8 @@ class RTSPCameraStreamer:
                 if not reachable:
                     if server_unreachable_since is None:
                         server_unreachable_since = time.time()
-                    elif time.time() - server_unreachable_since > 300:
-                        print(f"✗ Server unreachable for over 5 minutes, exiting to allow recovery")
+                    elif time.time() - server_unreachable_since > 120:
+                        print(f"✗ Server unreachable for over 2 minutes, exiting to allow recovery")
                         return False
                     print(f"✗ {msg}")
                     if self.reconnection_enabled and not self.shutdown_requested:

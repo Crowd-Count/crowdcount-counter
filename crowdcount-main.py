@@ -56,6 +56,7 @@ class CrowdCountMain:
         self.device_id = None
         self.api_password = None
         self.tailscale_auth_key = None
+        self._failed_reach_count = 0
         self._load_config()
 
     def _load_config(self):
@@ -516,10 +517,24 @@ class CrowdCountMain:
                     )
                     time.sleep(2)
 
-                    # Try to connect
+                    # Try activating existing NM connection profile first
+                    # (has correct security settings from initial provisioning)
+                    result = subprocess.run(
+                        ['sudo', 'nmcli', 'connection', 'up', ssid],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+
+                    if result.returncode == 0:
+                        print(f"✓ Connected to WiFi: {ssid}")
+                        return True
+
+                    # Fallback: create new connection with explicit security type
                     result = subprocess.run(
                         ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
-                         'password', password],
+                         'password', password,
+                         'wifi-sec.key-mgmt', 'wpa-psk'],
                         capture_output=True,
                         text=True,
                         timeout=30
@@ -545,6 +560,51 @@ class CrowdCountMain:
 
         print(f"✗ Failed to connect to any WiFi network")
         return False
+
+    def _check_server_reachable(self):
+        """Quick TCP check to verify the streaming server is actually reachable."""
+        import socket
+        server_ip = None
+        rtsp_port = 8554
+        if DEVICE_CONFIG.exists():
+            try:
+                with open(DEVICE_CONFIG) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('SERVER_IP='):
+                            server_ip = line.split('=', 1)[1].strip()
+                        elif line.startswith('RTSP_PORT='):
+                            try:
+                                rtsp_port = int(line.split('=', 1)[1].strip())
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+        if not server_ip:
+            return False
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((server_ip, rtsp_port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    def _escalated_recovery(self):
+        """Escalating recovery based on consecutive failures."""
+        if self._failed_reach_count <= 2:
+            print(f"Recovery level 1: re-authenticating Tailscale...")
+            self.authenticate_tailscale()
+        elif self._failed_reach_count <= 4:
+            print(f"Recovery level 2: restarting tailscaled daemon...")
+            subprocess.run(['sudo', 'systemctl', 'restart', 'tailscaled'],
+                           capture_output=True, timeout=15)
+            time.sleep(5)
+            self.authenticate_tailscale()
+        else:
+            print(f"Recovery level 3: all attempts exhausted, rebooting system...")
+            subprocess.run(['sudo', 'reboot'], timeout=10)
 
     def check_tailscale_connected(self):
         """Check if Tailscale is running and connected"""
@@ -706,6 +766,10 @@ class CrowdCountMain:
 
         # Main decision loop
         while self.running:
+            # Ping systemd watchdog (if configured)
+            subprocess.run(['systemd-notify', 'WATCHDOG=1'],
+                           capture_output=True, timeout=5)
+
             # Check WiFi status
             wifi_connected, ssid = self.check_wifi_connected()
             is_provisioned = self.is_provisioned()
@@ -753,11 +817,21 @@ class CrowdCountMain:
             elif wifi_connected and is_provisioned and has_config:
                 # Connected and ready → check Tailscale, then stream
                 if not tailscale_connected:
-                    print("Decision: WiFi connected but Tailscale not ready")
-                    print("Attempting Tailscale re-authentication...")
-                    self.authenticate_tailscale()
+                    self._failed_reach_count += 1
+                    print(f"Decision: WiFi connected but Tailscale not ready ({self._failed_reach_count} consecutive)")
+                    self._escalated_recovery()
                     time.sleep(5)
                     continue
+
+                # Tailscale reports connected — verify server is actually reachable
+                if not self._check_server_reachable():
+                    self._failed_reach_count += 1
+                    print(f"⚠ Server unreachable despite Tailscale connected ({self._failed_reach_count} consecutive)")
+                    self._escalated_recovery()
+                    time.sleep(10)
+                    continue
+
+                self._failed_reach_count = 0
 
                 if not version_reported:
                     self.report_version()

@@ -10,6 +10,7 @@ WorkingDirectory=/home/counter/crowdcount-counter
 ExecStart=/usr/bin/python3 /home/counter/crowdcount-counter/crowdcount-main.py
 Restart=always
 RestartSec=10
+WatchdogSec=120
 StandardOutput=journal
 StandardError=journal
 
