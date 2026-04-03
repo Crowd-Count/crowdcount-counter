@@ -493,7 +493,38 @@ class CrowdCountMain:
                 networks.append((fb_ssid, fb_pass))
 
         if not networks:
-            print("No saved or fallback WiFi credentials found")
+            # No credentials file — try reactivating any saved NM WiFi profile
+            # (NetworkManager saves profiles from initial provisioning)
+            print("No credentials file found, trying saved NetworkManager profiles...")
+            try:
+                # Get list of saved WiFi connections
+                result = subprocess.run(
+                    ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        if ':802-11-wireless' in line:
+                            profile_name = line.split(':')[0]
+                            print(f"  Trying NM profile: {profile_name}")
+                            subprocess.run(
+                                ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
+                                capture_output=True, timeout=10
+                            )
+                            time.sleep(2)
+                            conn_result = subprocess.run(
+                                ['sudo', 'nmcli', 'connection', 'up', profile_name],
+                                capture_output=True, text=True, timeout=30
+                            )
+                            if conn_result.returncode == 0:
+                                print(f"✓ Connected to WiFi via NM profile: {profile_name}")
+                                return True
+                            else:
+                                print(f"  Failed: {conn_result.stderr.strip() if conn_result.stderr else 'Unknown error'}")
+            except Exception as e:
+                print(f"  Error trying NM profiles: {e}")
+
+            print("No saved WiFi credentials or NM profiles worked")
             return False
 
         for ssid, password in networks:
