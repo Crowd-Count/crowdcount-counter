@@ -662,14 +662,22 @@ class CrowdCountMain:
             print(f"⚠ Error checking Tailscale: {e}")
             return False, None
 
-    def run_provisioning(self):
-        """Run the provisioning process (waits indefinitely for connection)"""
+    def run_provisioning(self, timeout=None):
+        """Run the provisioning process.
+
+        Args:
+            timeout: Max seconds to wait before killing provisioning.
+                     None = wait indefinitely (first-time setup).
+        """
         print("\n" + "="*60)
         print("STARTING PROVISIONING MODE")
         print("="*60)
         print("Device is not connected to WiFi")
         print("Starting Bluetooth provisioning...")
-        print("Waiting for user to provision via mobile app...")
+        if timeout:
+            print(f"Will retry WiFi in {timeout} seconds if no one connects...")
+        else:
+            print("Waiting for user to provision via mobile app...")
         print("="*60 + "\n")
 
         provision_script = PROVISIONING_DIR / "provision_manager.py"
@@ -681,8 +689,8 @@ class CrowdCountMain:
                 cwd=str(PROVISIONING_DIR)
             )
 
-            # Wait for provisioning to complete
-            return_code = self.current_process.wait()
+            # Wait for provisioning to complete (with optional timeout)
+            return_code = self.current_process.wait(timeout=timeout)
 
             if return_code == 0:
                 print("\n✓ Provisioning completed successfully")
@@ -691,6 +699,11 @@ class CrowdCountMain:
                 print(f"\n⚠ Provisioning exited with code {return_code}")
                 return False
 
+        except subprocess.TimeoutExpired:
+            print("\n⚠ Provisioning timed out, killing to retry WiFi...")
+            self.current_process.kill()
+            self.current_process.wait(timeout=5)
+            return False
         except Exception as e:
             print(f"\n✗ Error running provisioning: {e}")
             return False
@@ -816,33 +829,32 @@ class CrowdCountMain:
 
             # Decision logic
             if not wifi_connected:
-                # No WiFi → try saved credentials first, then provision
+                # No WiFi → try saved credentials, then cycle between
+                # WiFi retries and provisioning so neither blocks forever
                 print("Decision: WiFi not connected")
                 print()
 
-                # First, try to connect using saved WiFi credentials
+                # Try WiFi for up to 1 minute (3 attempts × ~20s each)
                 print("Trying saved WiFi credentials...")
                 if self.try_saved_wifi(max_attempts=3, retry_delay=5):
-                    # Successfully connected to saved WiFi
                     print("\n✓ Connected using saved WiFi credentials")
                     print("Rechecking status...")
                     time.sleep(2)
                     continue
 
-                # Saved WiFi failed or no credentials - start provisioning
+                # WiFi failed — run provisioning with 3-minute timeout
+                # so we cycle back to WiFi retries if no one connects
                 print("\nSaved WiFi connection failed or no credentials found")
-                print("Starting Bluetooth provisioning...")
-                success = self.run_provisioning()
+                print("Starting Bluetooth provisioning (3 min window)...")
+                success = self.run_provisioning(timeout=180)
 
                 if success:
-                    # After provisioning, recheck and potentially start streaming
                     print("\nRechecking status after provisioning...")
                     time.sleep(2)
                     continue
                 else:
-                    # Provisioning failed, wait and retry
-                    print("\nProvisioning failed. Retrying in 30 seconds...")
-                    time.sleep(30)
+                    # Timed out or failed — loop back to try WiFi again
+                    print("\nProvisioning window ended. Retrying WiFi...")
                     continue
 
             elif wifi_connected and is_provisioned and has_config:
