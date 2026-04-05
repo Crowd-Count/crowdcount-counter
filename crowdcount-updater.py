@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 # ── Configuration ────────────────────────────────────────────────────────
-UPDATE_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+UPDATE_INTERVAL_SECONDS = 6 * 60 * 60  # 6 hours
 API_BASE_URL = "https://api.crowdcount.tech"
 REPO_DIR = Path(__file__).parent
 MAIN_SERVICE = "crowdcount-main.service"
@@ -97,17 +97,21 @@ def sign_request(device_id: str, password: str, method: str, url: str, body: str
 
 
 def get_current_commit() -> str:
-    """Return the current HEAD commit hash by reading .git directly."""
+    """Return the current HEAD commit hash via git rev-parse (handles packed refs)."""
     try:
-        git_dir = REPO_DIR / ".git"
-        head_file = git_dir / "HEAD"
-        head = head_file.read_text().strip()
-        if head.startswith("ref: "):
-            ref_path = git_dir / head[5:]
-            return ref_path.read_text().strip()
-        return head
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        logger.error("git rev-parse HEAD failed: %s", result.stderr.strip())
+        return ""
     except Exception as e:
-        logger.error("Could not read git commit: %s", e)
+        logger.error("Could not get git commit: %s", e)
         return ""
 
 
@@ -287,6 +291,12 @@ def main() -> None:
             check_and_update(device_id, password)
         except Exception as exc:
             logger.error("Update check failed: %s", exc)
+        # Always report version as a heartbeat, regardless of update result
+        try:
+            current_commit = get_current_commit()
+            report_version(device_id, password, current_commit)
+        except Exception as exc:
+            logger.warning("Periodic version report failed: %s", exc)
 
 
 if __name__ == "__main__":
