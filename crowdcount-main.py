@@ -812,10 +812,6 @@ class CrowdCountMain:
 
         # Main decision loop
         while self.running:
-            # Ping systemd watchdog (if configured)
-            subprocess.run(['systemd-notify', 'WATCHDOG=1'],
-                           capture_output=True, timeout=5)
-
             # Check WiFi status
             wifi_connected, ssid = self.check_wifi_connected()
             is_provisioned = self.is_provisioned()
