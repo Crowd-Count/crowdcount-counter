@@ -11,6 +11,7 @@ import hmac as hmac_mod
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 import uuid
@@ -139,6 +140,64 @@ def report_version(device_id: str, password: str, commit_hash: str) -> None:
         logger.warning("Could not reach API to report version: %s", exc)
 
 
+def ensure_root_ssh_config() -> None:
+    """Copy counter user's SSH config and keys to root if missing.
+
+    The updater runs as root but the SSH deploy key for GitHub
+    is configured under the counter user.
+    """
+    root_ssh = Path("/root/.ssh")
+    root_config = root_ssh / "config"
+    counter_ssh = Path("/home/counter/.ssh")
+    counter_config = counter_ssh / "config"
+
+    # Already set up?
+    if root_config.exists() and "github-crowdcount-counter-ro" in root_config.read_text():
+        known_hosts = root_ssh / "known_hosts"
+        if known_hosts.exists() and "github.com" in known_hosts.read_text():
+            return
+
+    if not counter_config.exists():
+        logger.warning("No SSH config found at %s", counter_config)
+        return
+
+    try:
+        root_ssh.mkdir(mode=0o700, exist_ok=True)
+
+        # Copy SSH config
+        if not root_config.exists() or "github-crowdcount-counter-ro" not in root_config.read_text():
+            shutil.copy2(counter_config, root_config)
+            root_config.chmod(0o600)
+            logger.info("Copied SSH config to root from counter user")
+
+        # Copy key files referenced in the config
+        for line in counter_config.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("IdentityFile"):
+                key_name = Path(line.split()[1]).name
+                src = counter_ssh / key_name
+                dest = root_ssh / key_name
+                if src.exists() and not dest.exists():
+                    shutil.copy2(src, dest)
+                    dest.chmod(0o600)
+                    logger.info("Copied SSH key %s to root", key_name)
+
+        # Add GitHub host key to known_hosts if missing
+        known_hosts = root_ssh / "known_hosts"
+        if not known_hosts.exists() or "github.com" not in known_hosts.read_text():
+            result = subprocess.run(
+                ["ssh-keyscan", "github.com"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                with open(known_hosts, "a") as f:
+                    f.write(result.stdout)
+                known_hosts.chmod(0o600)
+                logger.info("Added GitHub host key to root known_hosts")
+    except Exception as exc:
+        logger.warning("Could not set up root SSH config: %s", exc)
+
+
 def ensure_git_safe_directory() -> None:
     """Mark the repo directory as safe for git (needed when service runs as root
     but repo is owned by another user)."""
@@ -251,6 +310,8 @@ def main() -> None:
 
     device_id, password = load_identity()
     logger.info("Device: %s", device_id)
+
+    ensure_root_ssh_config()
 
     # Report current version immediately on startup
     commit = get_current_commit()
