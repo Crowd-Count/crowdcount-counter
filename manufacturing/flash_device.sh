@@ -219,38 +219,40 @@ echo ""
 echo -e "${CYAN}[5/7] Stamping device identity...${NC}"
 echo ""
 
-# On a freshly flashed Pi image, the boot partition is partition 1
+# After raw dd, macOS needs to remount the disk to see the new partition table.
 BOOT_PARTITION="${DEVICE}s1"
 
-# Wait for macOS to detect partitions (can take several seconds after dd)
-echo "Waiting for boot partition to appear..."
-PARTITION_WAIT=0
-PARTITION_MAX_WAIT=15
-while [ $PARTITION_WAIT -lt $PARTITION_MAX_WAIT ]; do
+echo "Remounting disk to pick up new partition table..."
+diskutil mountDisk "$DEVICE" 2>/dev/null || true
+sleep 2
+
+# Wait for boot partition to be mountable
+MOUNT_WAIT=0
+MOUNT_MAX=15
+while [ $MOUNT_WAIT -lt $MOUNT_MAX ]; do
     if diskutil info "$BOOT_PARTITION" &>/dev/null; then
-        echo -e "${GREEN}Partition detected after ${PARTITION_WAIT}s${NC}"
+        echo -e "${GREEN}Partition detected after ${MOUNT_WAIT}s${NC}"
         break
     fi
     sleep 1
-    PARTITION_WAIT=$((PARTITION_WAIT + 1))
-    echo "  Waiting... (${PARTITION_WAIT}/${PARTITION_MAX_WAIT}s)"
+    MOUNT_WAIT=$((MOUNT_WAIT + 1))
+    echo "  Waiting for partition... (${MOUNT_WAIT}/${MOUNT_MAX}s)"
 done
 
 if ! diskutil info "$BOOT_PARTITION" &>/dev/null; then
-    echo -e "${RED}Boot partition $BOOT_PARTITION not detected after ${PARTITION_MAX_WAIT}s.${NC}"
-    echo "The SD card may have a corrupt partition table. Try re-flashing."
+    echo -e "${RED}Boot partition $BOOT_PARTITION not detected.${NC}"
+    echo "Try: remove the SD card, re-insert it, then run:"
+    echo "  $SCRIPT_DIR/customize_sd_card.sh"
     exit 1
 fi
 
-# Try to mount it — macOS may auto-mount after dd
+# Mount the boot partition
 echo "Mounting boot partition ($BOOT_PARTITION)..."
-
-# Check if already mounted
 MOUNT_POINT=$(diskutil info "$BOOT_PARTITION" 2>/dev/null | grep "Mount Point" | awk -F: '{print $2}' | xargs)
 
 if [ -z "$MOUNT_POINT" ] || [ "$MOUNT_POINT" = "" ]; then
-    diskutil mount "$BOOT_PARTITION"
-    sleep 1
+    diskutil mount "$BOOT_PARTITION" || true
+    sleep 2
     MOUNT_POINT=$(diskutil info "$BOOT_PARTITION" 2>/dev/null | grep "Mount Point" | awk -F: '{print $2}' | xargs)
 fi
 
