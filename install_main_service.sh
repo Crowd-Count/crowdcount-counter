@@ -101,8 +101,9 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Never give up restarting — this is the core service
-StartLimitIntervalSec=0
+# Allow 10 restarts per 10 minutes, then stop to avoid crash loop resource drain
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

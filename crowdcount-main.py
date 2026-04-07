@@ -50,14 +50,24 @@ SSH_HARDENED_MARKER = Path('/boot/firmware/.ssh-hardened')
 class CrowdCountMain:
     """Main orchestrator for CrowdCount device"""
 
+    # Tailscale connectivity is checked with `tailscale ping` (data-plane test),
+    # NOT `tailscale status` BackendState, which can report "Running" while the
+    # WireGuard tunnel is actually dead (known Tailscale bug #12332).
+    TAILSCALE_PING_TIMEOUT = 10  # seconds for tailscale ping test
+    MAX_REBOOT_COUNT = 3  # max reboots before giving up and just waiting
+    REBOOT_BACKOFF_FILE = Path('/tmp/crowdcount-reboot-count')
+
     def __init__(self):
         self.running = True
         self.current_process = None
         self.device_id = None
         self.api_password = None
         self.tailscale_auth_key = None
+        self.server_ip = None
         self._failed_reach_count = 0
+        self._recovery_backoff = 10  # seconds, grows with failures
         self._load_config()
+        self._load_server_ip()
 
     def _load_config(self):
         """Load device identity and configuration"""
@@ -108,6 +118,19 @@ class CrowdCountMain:
                             break
             except Exception as e:
                 print(f"⚠ Error reading device config: {e}")
+
+    def _load_server_ip(self):
+        """Load server Tailscale IP from device config for ping-based health checks."""
+        if DEVICE_CONFIG.exists():
+            try:
+                with open(DEVICE_CONFIG) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('SERVER_IP='):
+                            self.server_ip = line.split('=', 1)[1].strip()
+                            break
+            except Exception:
+                pass
 
     def _sign_request(self, method, url, body):
         """Compute HMAC-SHA256 signature headers for API requests."""
@@ -212,7 +235,12 @@ class CrowdCountMain:
             return False
 
     def authenticate_tailscale(self):
-        """Authenticate Tailscale with auth key and device hostname"""
+        """Authenticate Tailscale with auth key and device hostname.
+
+        Only uses --authkey for initial registration (NeedsLogin/NoState).
+        On already-authenticated nodes, --authkey is silently ignored by
+        Tailscale (bug #7995), so we don't pass it unnecessarily.
+        """
         if not self.tailscale_auth_key:
             print("⚠ No Tailscale auth key configured, skipping authentication")
             return False
@@ -223,24 +251,40 @@ class CrowdCountMain:
             return False
 
         try:
-            # Check if already authenticated
+            # Check current state with --json for precise state detection
             result = subprocess.run(
-                ['tailscale', 'status'],
+                ['tailscale', 'status', '--json'],
                 capture_output=True,
-                timeout=5,
+                timeout=10,
                 text=True
             )
 
-            # If already authenticated and running, skip
-            if result.returncode == 0 and 'logged out' not in result.stdout.lower():
+            backend_state = None
+            if result.returncode == 0:
+                try:
+                    status = json.loads(result.stdout)
+                    backend_state = status.get('BackendState', '')
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            if backend_state == 'Running':
                 print("✓ Tailscale already authenticated")
                 return True
 
-            # Authenticate with hostname
-            hostname = self.device_id if self.device_id else "crowdcount-counter"
-            print(f"Authenticating Tailscale with hostname: {hostname}")
+            if backend_state == 'NeedsMachineAuth':
+                print("⚠ Tailscale needs admin approval in the admin console")
+                return False
 
-            cmd = ['tailscale', 'up', f'--authkey={self.tailscale_auth_key}', f'--hostname={hostname}']
+            # NeedsLogin, NoState, Stopped, or unknown — try to authenticate
+            hostname = self.device_id if self.device_id else "crowdcount-counter"
+            print(f"Authenticating Tailscale with hostname: {hostname} (state: {backend_state})")
+
+            cmd = [
+                'tailscale', 'up',
+                f'--authkey={self.tailscale_auth_key}',
+                f'--hostname={hostname}',
+                '--accept-routes',
+            ]
             result = subprocess.run(cmd, capture_output=True, timeout=30, text=True)
 
             if result.returncode == 0:
@@ -253,6 +297,101 @@ class CrowdCountMain:
         except Exception as e:
             print(f"✗ Error authenticating Tailscale: {e}")
             return False
+
+    def ping_tailscale_peer(self):
+        """Test actual Tailscale data-plane connectivity using tailscale ping.
+
+        Unlike `tailscale status` which only checks BackendState, this sends
+        a real packet through the WireGuard tunnel. This catches the common
+        failure mode where tailscaled reports "Running" but the tunnel is
+        stale after a WiFi reconnection (Tailscale bug #12332).
+
+        Returns True if the peer is reachable, False otherwise.
+        """
+        if not self.server_ip:
+            # Fall back to TCP check if no server IP configured
+            return self._check_server_reachable()
+
+        try:
+            result = subprocess.run(
+                ['tailscale', 'ping', '--timeout=10s', '-c', '1', self.server_ip],
+                capture_output=True,
+                timeout=15,
+                text=True
+            )
+            if result.returncode == 0 and 'pong' in result.stdout.lower():
+                return True
+            print(f"⚠ Tailscale ping failed: {result.stdout.strip()} {result.stderr.strip()}")
+            return False
+        except subprocess.TimeoutExpired:
+            print("⚠ Tailscale ping timed out (tunnel likely dead)")
+            return False
+        except Exception as e:
+            print(f"⚠ Tailscale ping error: {e}")
+            return False
+
+    def restart_tailscaled(self):
+        """Restart the tailscaled daemon to clear stale tunnel state.
+
+        This is the only reliable fix for Tailscale bug #12332 where the
+        daemon gets stuck with stale DNS caches, HTTP transports, and Noise
+        clients after a network change. `tailscale up --authkey` does NOT
+        help on already-authenticated nodes (bug #7995).
+        """
+        print("Restarting tailscaled daemon to clear stale tunnel state...")
+        try:
+            subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'tailscaled'],
+                capture_output=True, timeout=15
+            )
+            # Wait for daemon to fully initialize and re-establish tunnel
+            print("Waiting 15s for tunnel to re-establish...")
+            time.sleep(15)
+
+            # Verify daemon is running
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'tailscaled'],
+                capture_output=True, timeout=5, text=True
+            )
+            if result.stdout.strip() == 'active':
+                print("✓ tailscaled restarted successfully")
+                return True
+            else:
+                print("✗ tailscaled failed to restart")
+                return False
+        except Exception as e:
+            print(f"✗ Error restarting tailscaled: {e}")
+            return False
+
+    def _restore_ssh_fallback(self):
+        """Re-enable regular SSH as emergency fallback when Tailscale is down.
+
+        If Tailscale has been down for extended periods and SSH was hardened
+        (regular SSH masked), the device becomes completely unreachable.
+        This restores SSH access so the device can be reached on the local network.
+        """
+        if not SSH_HARDENED_MARKER.exists():
+            return  # SSH was never hardened, nothing to restore
+
+        print("⚠ Tailscale down for extended period — restoring regular SSH as fallback")
+        try:
+            for cmd in [
+                ['sudo', 'systemctl', 'unmask', 'ssh'],
+                ['sudo', 'systemctl', 'enable', 'ssh'],
+                ['sudo', 'systemctl', 'start', 'ssh'],
+            ]:
+                subprocess.run(cmd, capture_output=True, timeout=10)
+            # Remove hardened marker so it can be re-hardened when Tailscale recovers
+            try:
+                SSH_HARDENED_MARKER.unlink()
+            except Exception:
+                subprocess.run(
+                    ['sudo', 'rm', '-f', str(SSH_HARDENED_MARKER)],
+                    capture_output=True, timeout=5
+                )
+            print("✓ Regular SSH restored as fallback")
+        except Exception as e:
+            print(f"⚠ Failed to restore SSH: {e}")
 
     def harden_ssh(self):
         """Disable regular SSH after confirming Tailscale SSH works.
@@ -624,42 +763,119 @@ class CrowdCountMain:
         except Exception:
             return False
 
+    def _get_reboot_count(self):
+        """Read persistent reboot counter (survives reboots via /boot/firmware)."""
+        reboot_file = Path('/boot/firmware/.crowdcount-reboot-count')
+        try:
+            if reboot_file.exists():
+                return int(reboot_file.read_text().strip())
+        except (ValueError, OSError):
+            pass
+        return 0
+
+    def _increment_reboot_count(self):
+        """Increment persistent reboot counter."""
+        reboot_file = Path('/boot/firmware/.crowdcount-reboot-count')
+        count = self._get_reboot_count() + 1
+        try:
+            reboot_file.write_text(str(count))
+        except PermissionError:
+            subprocess.run(
+                ['sudo', 'bash', '-c', f'echo {count} > {reboot_file}'],
+                capture_output=True, timeout=5
+            )
+        return count
+
+    def _reset_reboot_count(self):
+        """Reset reboot counter after successful connection."""
+        reboot_file = Path('/boot/firmware/.crowdcount-reboot-count')
+        try:
+            if reboot_file.exists():
+                reboot_file.write_text('0')
+        except PermissionError:
+            subprocess.run(
+                ['sudo', 'bash', '-c', f'echo 0 > {reboot_file}'],
+                capture_output=True, timeout=5
+            )
+
     def _escalated_recovery(self):
-        """Escalating recovery based on consecutive failures."""
+        """Escalating Tailscale recovery based on consecutive failures.
+
+        Recovery strategy based on Tailscale bug #12332 (stale tunnel on WiFi
+        reconnection). The key insight: `tailscale up --authkey` does NOTHING on
+        already-authenticated nodes. The only reliable fix is restarting the
+        tailscaled daemon to destroy stale internal state.
+
+        Levels:
+          1 (failures 1-2): Restart tailscaled daemon (clears stale tunnel state)
+          2 (failures 3-5): Restart tailscaled + re-authenticate
+          3 (failures 6+):  Reboot system (with backoff, max 3 reboots)
+        """
         if self._failed_reach_count <= 2:
-            print(f"Recovery level 1: re-authenticating Tailscale...")
-            self.authenticate_tailscale()
-        elif self._failed_reach_count <= 4:
-            print(f"Recovery level 2: restarting tailscaled daemon...")
-            subprocess.run(['sudo', 'systemctl', 'restart', 'tailscaled'],
-                           capture_output=True, timeout=15)
-            time.sleep(5)
+            # Level 1: Restart tailscaled — this is the primary fix for bug #12332
+            print(f"Recovery level 1 ({self._failed_reach_count}/2): restarting tailscaled daemon...")
+            self.restart_tailscaled()
+        elif self._failed_reach_count <= 5:
+            # Level 2: Restart daemon + force re-authentication
+            print(f"Recovery level 2 ({self._failed_reach_count}/5): restarting tailscaled + re-auth...")
+            self.restart_tailscaled()
             self.authenticate_tailscale()
         else:
-            print(f"Recovery level 3: all attempts exhausted, rebooting system...")
-            subprocess.run(['sudo', 'reboot'], timeout=10)
+            # Level 3: Reboot — but with backoff to avoid infinite reboot loops
+            reboot_count = self._get_reboot_count()
+            if reboot_count >= self.MAX_REBOOT_COUNT:
+                # Stop rebooting — it's not helping. Restore SSH and wait.
+                print(f"⚠ Already rebooted {reboot_count} times without recovery.")
+                print("  Stopping reboots — restoring SSH fallback and waiting...")
+                self._restore_ssh_fallback()
+                # Back off significantly — wait 5 minutes before next recovery attempt
+                self._recovery_backoff = min(self._recovery_backoff * 2, 300)
+                self._failed_reach_count = 0  # Reset to retry from level 1
+            else:
+                new_count = self._increment_reboot_count()
+                print(f"Recovery level 3: rebooting system (reboot {new_count}/{self.MAX_REBOOT_COUNT})...")
+                subprocess.run(['sudo', 'reboot'], timeout=10)
 
     def check_tailscale_connected(self):
-        """Check if Tailscale is running and connected"""
+        """Check if Tailscale is running and has actual data-plane connectivity.
+
+        Uses two checks:
+        1. `tailscale status --json` for BackendState and IP (fast, but can lie)
+        2. `tailscale ping` to verify actual tunnel connectivity (catches bug #12332)
+        """
         try:
             result = subprocess.run(
                 ['tailscale', 'status', '--json'],
                 capture_output=True,
-                timeout=5,
+                timeout=10,
                 text=True
             )
             if result.returncode == 0:
-                import json
                 status = json.loads(result.stdout)
-                # Check if we have a valid backend state
                 backend_state = status.get('BackendState', '')
+
+                if backend_state == 'NeedsLogin':
+                    print("⚠ Tailscale needs re-authentication (NeedsLogin state)")
+                    return False, None
+
                 if backend_state == 'Running':
-                    # Get our Tailscale IP
                     self_peer = status.get('Self', {})
                     tailscale_ips = self_peer.get('TailscaleIPs', [])
-                    if tailscale_ips:
-                        return True, tailscale_ips[0]
+                    tailscale_ip = tailscale_ips[0] if tailscale_ips else None
+
+                    # BackendState says Running — but verify with actual ping
+                    # This catches the stale tunnel bug (#12332) where the daemon
+                    # reports Running but the WireGuard tunnel is dead
+                    if self.ping_tailscale_peer():
+                        return True, tailscale_ip
+                    else:
+                        print("⚠ Tailscale reports Running but ping failed — tunnel is stale")
+                        return False, tailscale_ip
+
                 return False, None
+        except subprocess.TimeoutExpired:
+            print("⚠ tailscale status timed out — daemon may be hung")
+            return False, None
         except Exception as e:
             print(f"⚠ Error checking Tailscale: {e}")
             return False, None
@@ -860,19 +1076,28 @@ class CrowdCountMain:
                 if not tailscale_connected:
                     self._failed_reach_count += 1
                     print(f"Decision: WiFi connected but Tailscale not ready ({self._failed_reach_count} consecutive)")
+
+                    # After 10+ failures, restore SSH so device is reachable on local network
+                    if self._failed_reach_count >= 10:
+                        self._restore_ssh_fallback()
+
                     self._escalated_recovery()
-                    time.sleep(5)
+                    print(f"Waiting {self._recovery_backoff}s before next attempt...")
+                    time.sleep(self._recovery_backoff)
                     continue
 
-                # Tailscale reports connected — verify server is actually reachable
+                # Tailscale ping succeeded — verify RTSP server port is reachable too
                 if not self._check_server_reachable():
                     self._failed_reach_count += 1
-                    print(f"⚠ Server unreachable despite Tailscale connected ({self._failed_reach_count} consecutive)")
-                    self._escalated_recovery()
+                    print(f"⚠ Server RTSP port unreachable ({self._failed_reach_count} consecutive)")
+                    # Don't escalate Tailscale recovery for server-side issues
                     time.sleep(10)
                     continue
 
+                # Everything working — reset failure tracking
                 self._failed_reach_count = 0
+                self._recovery_backoff = 10
+                self._reset_reboot_count()
 
                 if not version_reported:
                     self.report_version()
