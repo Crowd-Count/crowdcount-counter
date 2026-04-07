@@ -1,1 +1,0 @@
-crowdcount://provision?id=C6579&secret=crowdcountBTC6579
