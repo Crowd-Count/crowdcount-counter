@@ -10,7 +10,9 @@ import os
 from pathlib import Path
 
 
-def setup_logging(name: str, log_dir: str = None, level: int = logging.INFO) -> logging.Logger:
+def setup_logging(
+    name: str, log_dir: str = None, level: int = logging.INFO
+) -> logging.Logger:
     """
     Setup logging with both console and file output.
 
@@ -32,8 +34,8 @@ def setup_logging(name: str, log_dir: str = None, level: int = logging.INFO) -> 
 
     # Create formatter
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     # Console handler - always add
@@ -45,21 +47,21 @@ def setup_logging(name: str, log_dir: str = None, level: int = logging.INFO) -> 
     # File handler - try to create if possible
     if log_dir is None:
         # Try system log directory first, then user directory
-        if os.path.exists('/var/log') and os.access('/var/log', os.W_OK):
-            log_dir = '/var/log/crowdcount'
+        if os.path.exists("/var/log") and os.access("/var/log", os.W_OK):
+            log_dir = "/var/log/crowdcount"
         else:
-            log_dir = str(Path.home() / '.local' / 'log' / 'crowdcount')
+            log_dir = str(Path.home() / ".local" / "log" / "crowdcount")
 
     try:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
-        log_file = Path(log_dir) / f'{name.replace(".", "_")}.log'
+        log_file = Path(log_dir) / f"{name.replace('.', '_')}.log"
 
         # Rotating file handler - 5MB max, keep 3 backups
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
             maxBytes=5 * 1024 * 1024,  # 5MB
             backupCount=3,
-            encoding='utf-8'
+            encoding="utf-8",
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
