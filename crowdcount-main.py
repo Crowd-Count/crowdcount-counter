@@ -12,6 +12,7 @@ import configparser
 import hashlib
 import hmac as hmac_mod
 import json
+import threading
 import uuid
 from pathlib import Path
 
@@ -40,6 +41,14 @@ IDENTITY_PATHS = [
 
 # Marker file: once SSH is hardened, don't repeat on every boot
 SSH_HARDENED_MARKER = Path("/boot/firmware/.ssh-hardened")
+
+# Periodic occupancy check-in. Every online device drops a heartbeat this often
+# while streaming; the server re-samples the current count (incl. 0) so quiet
+# periods count toward averages, and "no heartbeat in a slot" means offline.
+HEARTBEAT_INTERVAL_SECONDS = 5 * 60
+
+# Cloud API base for signed device calls (version reports, heartbeats).
+API_BASE_URL = "https://api.crowdcount.tech"
 
 
 class CrowdCountMain:
@@ -153,6 +162,37 @@ class CrowdCountMain:
             print(f"⚠ Could not get git commit: {e}")
             return None
 
+    def _post_signed(self, endpoint, extra_payload=None):
+        """POST a signed, credential-bearing JSON request to the API server.
+
+        Shared plumbing for report_version / send_heartbeat: injects device_id +
+        password, an idempotency key, and the HMAC signature headers. Returns the
+        requests.Response, or None if credentials are missing or the request
+        raised. Callers handle their own success/failure logging.
+        """
+        if not self.device_id or not self.api_password:
+            return None
+        url = f"{API_BASE_URL}{endpoint}"
+        payload = json.dumps(
+            {
+                "device_id": self.device_id,
+                "password": self.api_password,
+                **(extra_payload or {}),
+            }
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+        try:
+            import requests
+
+            headers.update(self._sign_request("POST", url, payload))
+            return requests.post(url, data=payload, headers=headers, timeout=30)
+        except Exception as e:
+            print(f"⚠ POST {endpoint} failed: {e}")
+            return None
+
     def report_version(self):
         """Report the current git commit hash to the API server."""
         if not self.device_id:
@@ -165,29 +205,42 @@ class CrowdCountMain:
         if not commit:
             print("⚠ Skipping version report: could not get git commit hash")
             return
-        try:
-            import requests
+        resp = self._post_signed("/report_version", {"commit_hash": commit})
+        if resp is None:
+            return
+        if resp.ok:
+            print(f"✓ Reported version {commit[:8]} to server")
+        else:
+            print(f"⚠ Version report failed ({resp.status_code}): {resp.text}")
 
-            url = "https://api.crowdcount.tech/report_version"
-            payload = json.dumps(
-                {
-                    "device_id": self.device_id,
-                    "password": self.api_password,
-                    "commit_hash": commit,
-                }
-            )
-            headers = {
-                "Content-Type": "application/json",
-                "Idempotency-Key": str(uuid.uuid4()),
-            }
-            headers.update(self._sign_request("POST", url, payload))
-            resp = requests.post(url, data=payload, headers=headers, timeout=30)
-            if resp.ok:
-                print(f"✓ Reported version {commit[:8]} to server")
-            else:
-                print(f"⚠ Version report failed ({resp.status_code}): {resp.text}")
-        except Exception as e:
-            print(f"⚠ Could not report version: {e}")
+    def send_heartbeat(self):
+        """POST a single occupancy heartbeat to the API server.
+
+        The server records last_seen and re-samples this device's current count
+        into its location aggregates. No payload beyond credentials — the server
+        snapshots its own current_count rather than trusting a reported value.
+        """
+        resp = self._post_signed("/device_heartbeat")
+        if resp is not None and not resp.ok:
+            print(f"⚠ Heartbeat failed ({resp.status_code}): {resp.text}")
+
+    def _heartbeat_loop(self):
+        """Background loop: send a heartbeat every interval while streaming.
+
+        Only beats when the streaming subprocess is alive — a live stream is
+        the device genuinely observing, which is exactly what makes an empty
+        count trustworthy as "online and steady at 0". Sleeps in short slices
+        so shutdown is responsive.
+        """
+        while self.running:
+            proc = self.current_process
+            if proc is not None and proc.poll() is None:
+                self.send_heartbeat()
+            # Sleep the interval in 1s slices so a shutdown signal is honored
+            for _ in range(HEARTBEAT_INTERVAL_SECONDS):
+                if not self.running:
+                    return
+                time.sleep(1)
 
     def ensure_tailscaled_running(self):
         """Make sure the tailscaled daemon is running, restart it if needed."""
@@ -837,6 +890,12 @@ class CrowdCountMain:
     def run(self):
         """Main orchestration loop"""
         self.setup_signal_handlers()
+
+        # Background occupancy heartbeat (beats only while streaming is alive)
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True, name="heartbeat"
+        )
+        heartbeat_thread.start()
 
         print("\n" + "=" * 60)
         print("CROWDCOUNT DEVICE STARTUP")
