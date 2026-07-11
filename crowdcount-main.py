@@ -4,7 +4,6 @@ CrowdCount Main Orchestrator
 Manages device startup: provisions if no WiFi, streams if connected
 """
 
-import os
 import sys
 import time
 import subprocess
@@ -13,38 +12,34 @@ import configparser
 import hashlib
 import hmac as hmac_mod
 import json
-import logging
 import uuid
 from pathlib import Path
 
 # Add src directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
-sys.path.insert(0, str(Path(__file__).parent / 'src' / 'provisioning'))
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent / "src" / "provisioning"))
 from logging_config import setup_logging
 
 # Setup logging
-logger = setup_logging('crowdcount-main')
+logger = setup_logging("crowdcount-main")
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent
 PROVISIONING_DIR = SCRIPT_DIR / "src" / "provisioning"
 STREAM_DIR = SCRIPT_DIR / "src" / "counter-stream"
 
-PROVISIONED_FLAGS = [
-    Path("/boot/firmware/provisioned"),
-    Path("/boot/provisioned")
-]
+PROVISIONED_FLAGS = [Path("/boot/firmware/provisioned"), Path("/boot/provisioned")]
 
 DEVICE_CONFIG = STREAM_DIR / "device-info.conf"
 
 # Device identity file locations
 IDENTITY_PATHS = [
-    Path('/boot/firmware/device-identity.conf'),
-    Path('/boot/device-identity.conf'),
+    Path("/boot/firmware/device-identity.conf"),
+    Path("/boot/device-identity.conf"),
 ]
 
 # Marker file: once SSH is hardened, don't repeat on every boot
-SSH_HARDENED_MARKER = Path('/boot/firmware/.ssh-hardened')
+SSH_HARDENED_MARKER = Path("/boot/firmware/.ssh-hardened")
 
 
 class CrowdCountMain:
@@ -67,12 +62,18 @@ class CrowdCountMain:
                 try:
                     config = configparser.ConfigParser()
                     config.read(identity_path)
-                    section = config['DEFAULT'] if 'DEFAULT' in config else config[config.sections()[0]]
-                    self.device_id = section.get('DEVICE_ID', None)
+                    section = (
+                        config["DEFAULT"]
+                        if "DEFAULT" in config
+                        else config[config.sections()[0]]
+                    )
+                    self.device_id = section.get("DEVICE_ID", None)
                     # Also read API password for version reporting
-                    self.api_password = section.get('API_PASSWORD', None) or None
+                    self.api_password = section.get("API_PASSWORD", None) or None
                     if self.device_id:
-                        print(f"✓ Loaded device identity: {self.device_id} from {identity_path}")
+                        print(
+                            f"✓ Loaded device identity: {self.device_id} from {identity_path}"
+                        )
                         break
                 except Exception as e:
                     print(f"⚠ Error reading {identity_path}: {e}")
@@ -85,8 +86,8 @@ class CrowdCountMain:
                         with open(identity_path) as f:
                             for line in f:
                                 line = line.strip()
-                                if line.startswith('API_PASSWORD='):
-                                    val = line.split('=', 1)[1].strip()
+                                if line.startswith("API_PASSWORD="):
+                                    val = line.split("=", 1)[1].strip()
                                     if val:
                                         self.api_password = val
                                         break
@@ -101,10 +102,10 @@ class CrowdCountMain:
                 # Read raw file (it's in KEY=VALUE format, not INI)
                 with open(DEVICE_CONFIG) as f:
                     for line in f:
-                        if line.startswith('TAILSCALE_AUTH_KEY='):
-                            self.tailscale_auth_key = line.split('=', 1)[1].strip()
+                        if line.startswith("TAILSCALE_AUTH_KEY="):
+                            self.tailscale_auth_key = line.split("=", 1)[1].strip()
                             if self.tailscale_auth_key:
-                                print(f"✓ Loaded Tailscale auth key")
+                                print("✓ Loaded Tailscale auth key")
                             break
             except Exception as e:
                 print(f"⚠ Error reading device config: {e}")
@@ -114,26 +115,31 @@ class CrowdCountMain:
         if not self.api_password or not self.device_id:
             return {}
         from urllib.parse import urlparse
-        signing_key = hashlib.sha256(f"{self.device_id}:{self.api_password}".encode()).digest()
+
+        signing_key = hashlib.sha256(
+            f"{self.device_id}:{self.api_password}".encode()
+        ).digest()
         path = urlparse(url).path
         timestamp = str(int(time.time()))
         nonce = str(uuid.uuid4())
         body_hash = hashlib.sha256(body.encode()).hexdigest()
         string_to_sign = f"{method}\n{path}\n{body_hash}\n{timestamp}\n{nonce}"
-        signature = hmac_mod.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        signature = hmac_mod.new(
+            signing_key, string_to_sign.encode(), hashlib.sha256
+        ).hexdigest()
         return {
-            'X-CC-Signature': signature,
-            'X-CC-Timestamp': timestamp,
-            'X-CC-Nonce': nonce,
-            'X-CC-Device-Id': self.device_id,
-            'X-CC-Sig-Version': '1',
+            "X-CC-Signature": signature,
+            "X-CC-Timestamp": timestamp,
+            "X-CC-Nonce": nonce,
+            "X-CC-Device-Id": self.device_id,
+            "X-CC-Sig-Version": "1",
         }
 
     def _get_current_commit(self):
         """Return the current HEAD commit hash via git rev-parse (handles packed refs)."""
         try:
             result = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
+                ["git", "rev-parse", "HEAD"],
                 cwd=SCRIPT_DIR,
                 capture_output=True,
                 text=True,
@@ -161,12 +167,15 @@ class CrowdCountMain:
             return
         try:
             import requests
+
             url = "https://api.crowdcount.tech/report_version"
-            payload = json.dumps({
-                "device_id": self.device_id,
-                "password": self.api_password,
-                "commit_hash": commit,
-            })
+            payload = json.dumps(
+                {
+                    "device_id": self.device_id,
+                    "password": self.api_password,
+                    "commit_hash": commit,
+                }
+            )
             headers = {
                 "Content-Type": "application/json",
                 "Idempotency-Key": str(uuid.uuid4()),
@@ -184,24 +193,29 @@ class CrowdCountMain:
         """Make sure the tailscaled daemon is running, restart it if needed."""
         try:
             result = subprocess.run(
-                ['systemctl', 'is-active', 'tailscaled'],
-                capture_output=True, timeout=5, text=True
+                ["systemctl", "is-active", "tailscaled"],
+                capture_output=True,
+                timeout=5,
+                text=True,
             )
-            if result.stdout.strip() == 'active':
+            if result.stdout.strip() == "active":
                 return True
 
             print("⚠ tailscaled is not running, attempting restart...")
             subprocess.run(
-                ['sudo', 'systemctl', 'restart', 'tailscaled'],
-                capture_output=True, timeout=15
+                ["sudo", "systemctl", "restart", "tailscaled"],
+                capture_output=True,
+                timeout=15,
             )
             time.sleep(2)
 
             result = subprocess.run(
-                ['systemctl', 'is-active', 'tailscaled'],
-                capture_output=True, timeout=5, text=True
+                ["systemctl", "is-active", "tailscaled"],
+                capture_output=True,
+                timeout=5,
+                text=True,
             )
-            if result.stdout.strip() == 'active':
+            if result.stdout.strip() == "active":
                 print("✓ tailscaled restarted successfully")
                 return True
             else:
@@ -225,14 +239,11 @@ class CrowdCountMain:
         try:
             # Check if already authenticated
             result = subprocess.run(
-                ['tailscale', 'status'],
-                capture_output=True,
-                timeout=5,
-                text=True
+                ["tailscale", "status"], capture_output=True, timeout=5, text=True
             )
 
             # If already authenticated and running, skip
-            if result.returncode == 0 and 'logged out' not in result.stdout.lower():
+            if result.returncode == 0 and "logged out" not in result.stdout.lower():
                 print("✓ Tailscale already authenticated")
                 return True
 
@@ -240,7 +251,12 @@ class CrowdCountMain:
             hostname = self.device_id if self.device_id else "crowdcount-counter"
             print(f"Authenticating Tailscale with hostname: {hostname}")
 
-            cmd = ['tailscale', 'up', f'--authkey={self.tailscale_auth_key}', f'--hostname={hostname}']
+            cmd = [
+                "tailscale",
+                "up",
+                f"--authkey={self.tailscale_auth_key}",
+                f"--hostname={hostname}",
+            ]
             result = subprocess.run(cmd, capture_output=True, timeout=30, text=True)
 
             if result.returncode == 0:
@@ -266,19 +282,22 @@ class CrowdCountMain:
         try:
             # Enable Tailscale SSH
             result = subprocess.run(
-                ['sudo', 'tailscale', 'set', '--ssh'],
-                capture_output=True, timeout=10, text=True
+                ["sudo", "tailscale", "set", "--ssh"],
+                capture_output=True,
+                timeout=10,
+                text=True,
             )
             if result.returncode != 0:
-                print(f"⚠ Failed to enable Tailscale SSH, keeping regular SSH: {result.stderr}")
+                print(
+                    f"⚠ Failed to enable Tailscale SSH, keeping regular SSH: {result.stderr}"
+                )
                 return
 
             print("✓ Tailscale SSH enabled")
 
             # Verify Tailscale SSH actually works before disabling regular SSH
             ts_ip_result = subprocess.run(
-                ['tailscale', 'ip', '-4'],
-                capture_output=True, text=True, timeout=5
+                ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5
             )
             ts_ip = ts_ip_result.stdout.strip()
             if not ts_ip:
@@ -287,11 +306,21 @@ class CrowdCountMain:
 
             try:
                 verify_result = subprocess.run(
-                    ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5',
-                     ts_ip, 'echo', 'tailscale-ssh-ok'],
-                    capture_output=True, text=True, timeout=10
+                    [
+                        "ssh",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=5",
+                        ts_ip,
+                        "echo",
+                        "tailscale-ssh-ok",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
-                if 'tailscale-ssh-ok' not in verify_result.stdout:
+                if "tailscale-ssh-ok" not in verify_result.stdout:
                     print("⚠ Tailscale SSH verification failed — keeping regular SSH")
                     return
             except subprocess.TimeoutExpired:
@@ -302,9 +331,9 @@ class CrowdCountMain:
 
             # NOW safe to disable regular SSH
             for cmd in [
-                ['sudo', 'systemctl', 'stop', 'ssh'],
-                ['sudo', 'systemctl', 'disable', 'ssh'],
-                ['sudo', 'systemctl', 'mask', 'ssh'],
+                ["sudo", "systemctl", "stop", "ssh"],
+                ["sudo", "systemctl", "disable", "ssh"],
+                ["sudo", "systemctl", "mask", "ssh"],
             ]:
                 subprocess.run(cmd, capture_output=True, timeout=10)
 
@@ -317,8 +346,14 @@ class CrowdCountMain:
                 )
             except PermissionError:
                 subprocess.run(
-                    ['sudo', 'bash', '-c', f'echo "SSH hardened on $(date)" > {SSH_HARDENED_MARKER}'],
-                    capture_output=True, timeout=5
+                    [
+                        "sudo",
+                        "bash",
+                        "-c",
+                        f'echo "SSH hardened on $(date)" > {SSH_HARDENED_MARKER}',
+                    ],
+                    capture_output=True,
+                    timeout=5,
                 )
 
             print(f"✓ Marker written: {SSH_HARDENED_MARKER}")
@@ -331,25 +366,29 @@ class CrowdCountMain:
         # Method 1: Try NetworkManager (most reliable on modern systems)
         try:
             result = subprocess.run(
-                ['nmcli', '-t', '-f', 'STATE', 'general'],
+                ["nmcli", "-t", "-f", "STATE", "general"],
                 capture_output=True,
                 timeout=5,
-                text=True
+                text=True,
             )
             if result.returncode == 0:
                 state = result.stdout.strip()
-                if state in ['connected', 'connected (site only)', 'connected (local only)']:
+                if state in [
+                    "connected",
+                    "connected (site only)",
+                    "connected (local only)",
+                ]:
                     # Verify WiFi specifically is connected (not just Tailscale/loopback)
                     try:
                         ssid_result = subprocess.run(
-                            ['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'],
+                            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
                             capture_output=True,
                             timeout=5,
-                            text=True
+                            text=True,
                         )
-                        for line in ssid_result.stdout.strip().split('\n'):
-                            if line.startswith('yes:'):
-                                ssid = line.split(':', 1)[1]
+                        for line in ssid_result.stdout.strip().split("\n"):
+                            if line.startswith("yes:"):
+                                ssid = line.split(":", 1)[1]
                                 return True, ssid if ssid else "unknown"
                     except Exception:
                         pass
@@ -361,19 +400,12 @@ class CrowdCountMain:
 
         # Method 2: Try iwgetid (classic method)
         try:
-            result = subprocess.run(
-                ['iwgetid'],
-                capture_output=True,
-                timeout=5
-            )
+            result = subprocess.run(["iwgetid"], capture_output=True, timeout=5)
             if result.returncode == 0:
                 # Get SSID for display
                 try:
                     ssid = subprocess.run(
-                        ['iwgetid', '-r'],
-                        capture_output=True,
-                        timeout=5,
-                        text=True
+                        ["iwgetid", "-r"], capture_output=True, timeout=5, text=True
                     ).stdout.strip()
                     return True, ssid if ssid else "unknown"
                 except Exception:
@@ -386,10 +418,10 @@ class CrowdCountMain:
         # Method 3: Check default route on wlan0 (not tailscale/lo)
         try:
             result = subprocess.run(
-                ['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
+                ["ip", "route", "show", "default", "dev", "wlan0"],
                 capture_output=True,
                 timeout=5,
-                text=True
+                text=True,
             )
             if result.returncode == 0 and result.stdout.strip():
                 ssid = self._get_ssid_from_wpa()
@@ -400,16 +432,13 @@ class CrowdCountMain:
         # Method 4: Check wpa_supplicant status
         try:
             result = subprocess.run(
-                ['wpa_cli', 'status'],
-                capture_output=True,
-                timeout=5,
-                text=True
+                ["wpa_cli", "status"], capture_output=True, timeout=5, text=True
             )
             if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if line.startswith('wpa_state='):
-                        state = line.split('=', 1)[1]
-                        if state == 'COMPLETED':
+                for line in result.stdout.split("\n"):
+                    if line.startswith("wpa_state="):
+                        state = line.split("=", 1)[1]
+                        if state == "COMPLETED":
                             ssid = self._get_ssid_from_wpa()
                             return True, ssid if ssid else "unknown"
         except FileNotFoundError:
@@ -424,15 +453,12 @@ class CrowdCountMain:
         """Get SSID from wpa_supplicant"""
         try:
             result = subprocess.run(
-                ['wpa_cli', 'status'],
-                capture_output=True,
-                timeout=5,
-                text=True
+                ["wpa_cli", "status"], capture_output=True, timeout=5, text=True
             )
             if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if line.startswith('ssid='):
-                        return line.split('=', 1)[1]
+                for line in result.stdout.split("\n"):
+                    if line.startswith("ssid="):
+                        return line.split("=", 1)[1]
         except Exception:
             pass
         return None
@@ -460,9 +486,9 @@ class CrowdCountMain:
 
         # Check for saved WiFi credentials
         credential_locations = [
-            Path('/boot/firmware/wifi-credentials.conf'),
-            Path('/boot/wifi-credentials.conf'),
-            Path.home() / '.config' / 'crowdcount' / 'wifi-credentials.conf',
+            Path("/boot/firmware/wifi-credentials.conf"),
+            Path("/boot/wifi-credentials.conf"),
+            Path.home() / ".config" / "crowdcount" / "wifi-credentials.conf",
         ]
 
         saved_ssid = None
@@ -471,13 +497,13 @@ class CrowdCountMain:
         for config_file in credential_locations:
             if config_file.exists():
                 try:
-                    with open(config_file, 'r') as f:
+                    with open(config_file, "r") as f:
                         for line in f:
                             line = line.strip()
-                            if line.startswith('WIFI_SSID='):
-                                saved_ssid = line.split('=', 1)[1]
-                            elif line.startswith('WIFI_PASSWORD='):
-                                saved_password = line.split('=', 1)[1]
+                            if line.startswith("WIFI_SSID="):
+                                saved_ssid = line.split("=", 1)[1]
+                            elif line.startswith("WIFI_PASSWORD="):
+                                saved_password = line.split("=", 1)[1]
 
                     if saved_ssid and saved_password:
                         print(f"✓ Found saved WiFi credentials for: {saved_ssid}")
@@ -501,28 +527,37 @@ class CrowdCountMain:
             try:
                 # Get list of saved WiFi connections
                 result = subprocess.run(
-                    ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
-                    capture_output=True, text=True, timeout=10
+                    ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
-                    for line in result.stdout.strip().split('\n'):
-                        if ':802-11-wireless' in line:
-                            profile_name = line.split(':')[0]
+                    for line in result.stdout.strip().split("\n"):
+                        if ":802-11-wireless" in line:
+                            profile_name = line.split(":")[0]
                             print(f"  Trying NM profile: {profile_name}")
                             subprocess.run(
-                                ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
-                                capture_output=True, timeout=10
+                                ["sudo", "nmcli", "radio", "wifi", "on"],
+                                capture_output=True,
+                                timeout=10,
                             )
                             time.sleep(2)
                             conn_result = subprocess.run(
-                                ['sudo', 'nmcli', 'connection', 'up', profile_name],
-                                capture_output=True, text=True, timeout=30
+                                ["sudo", "nmcli", "connection", "up", profile_name],
+                                capture_output=True,
+                                text=True,
+                                timeout=30,
                             )
                             if conn_result.returncode == 0:
-                                print(f"✓ Connected to WiFi via NM profile: {profile_name}")
+                                print(
+                                    f"✓ Connected to WiFi via NM profile: {profile_name}"
+                                )
                                 return True
                             else:
-                                print(f"  Failed: {conn_result.stderr.strip() if conn_result.stderr else 'Unknown error'}")
+                                print(
+                                    f"  Failed: {conn_result.stderr.strip() if conn_result.stderr else 'Unknown error'}"
+                                )
             except Exception as e:
                 print(f"  Error trying NM profiles: {e}")
 
@@ -544,19 +579,19 @@ class CrowdCountMain:
 
                     # Turn on WiFi radio if off
                     subprocess.run(
-                        ['sudo', 'nmcli', 'radio', 'wifi', 'on'],
+                        ["sudo", "nmcli", "radio", "wifi", "on"],
                         capture_output=True,
-                        timeout=10
+                        timeout=10,
                     )
                     time.sleep(2)
 
                     # Try activating existing NM connection profile first
                     # (has correct security settings from initial provisioning)
                     result = subprocess.run(
-                        ['sudo', 'nmcli', 'connection', 'up', ssid],
+                        ["sudo", "nmcli", "connection", "up", ssid],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30,
                     )
 
                     if result.returncode == 0:
@@ -565,23 +600,34 @@ class CrowdCountMain:
 
                     # Fallback: create new connection with explicit security type
                     result = subprocess.run(
-                        ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
-                         'password', password,
-                         'wifi-sec.key-mgmt', 'wpa-psk'],
+                        [
+                            "sudo",
+                            "nmcli",
+                            "dev",
+                            "wifi",
+                            "connect",
+                            ssid,
+                            "password",
+                            password,
+                            "wifi-sec.key-mgmt",
+                            "wpa-psk",
+                        ],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30,
                     )
 
                     if result.returncode == 0:
                         print(f"✓ Connected to WiFi: {ssid}")
                         return True
                     else:
-                        error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                        error_msg = (
+                            result.stderr.strip() if result.stderr else "Unknown error"
+                        )
                         print(f"  Connection failed: {error_msg}")
 
                 except subprocess.TimeoutExpired:
-                    print(f"  Connection attempt timed out")
+                    print("  Connection attempt timed out")
                 except Exception as e:
                     print(f"  Error: {e}")
 
@@ -591,12 +637,13 @@ class CrowdCountMain:
 
             print(f"✗ Failed to connect to {ssid} after {max_attempts} attempts")
 
-        print(f"✗ Failed to connect to any WiFi network")
+        print("✗ Failed to connect to any WiFi network")
         return False
 
     def _check_server_reachable(self):
         """Quick TCP check to verify the streaming server is actually reachable."""
         import socket
+
         server_ip = None
         rtsp_port = 8554
         if DEVICE_CONFIG.exists():
@@ -604,11 +651,11 @@ class CrowdCountMain:
                 with open(DEVICE_CONFIG) as f:
                     for line in f:
                         line = line.strip()
-                        if line.startswith('SERVER_IP='):
-                            server_ip = line.split('=', 1)[1].strip()
-                        elif line.startswith('RTSP_PORT='):
+                        if line.startswith("SERVER_IP="):
+                            server_ip = line.split("=", 1)[1].strip()
+                        elif line.startswith("RTSP_PORT="):
                             try:
-                                rtsp_port = int(line.split('=', 1)[1].strip())
+                                rtsp_port = int(line.split("=", 1)[1].strip())
                             except ValueError:
                                 pass
             except Exception:
@@ -627,36 +674,40 @@ class CrowdCountMain:
     def _escalated_recovery(self):
         """Escalating recovery based on consecutive failures."""
         if self._failed_reach_count <= 2:
-            print(f"Recovery level 1: re-authenticating Tailscale...")
+            print("Recovery level 1: re-authenticating Tailscale...")
             self.authenticate_tailscale()
         elif self._failed_reach_count <= 4:
-            print(f"Recovery level 2: restarting tailscaled daemon...")
-            subprocess.run(['sudo', 'systemctl', 'restart', 'tailscaled'],
-                           capture_output=True, timeout=15)
+            print("Recovery level 2: restarting tailscaled daemon...")
+            subprocess.run(
+                ["sudo", "systemctl", "restart", "tailscaled"],
+                capture_output=True,
+                timeout=15,
+            )
             time.sleep(5)
             self.authenticate_tailscale()
         else:
-            print(f"Recovery level 3: all attempts exhausted, rebooting system...")
-            subprocess.run(['sudo', 'reboot'], timeout=10)
+            print("Recovery level 3: all attempts exhausted, rebooting system...")
+            subprocess.run(["sudo", "reboot"], timeout=10)
 
     def check_tailscale_connected(self):
         """Check if Tailscale is running and connected"""
         try:
             result = subprocess.run(
-                ['tailscale', 'status', '--json'],
+                ["tailscale", "status", "--json"],
                 capture_output=True,
                 timeout=5,
-                text=True
+                text=True,
             )
             if result.returncode == 0:
                 import json
+
                 status = json.loads(result.stdout)
                 # Check if we have a valid backend state
-                backend_state = status.get('BackendState', '')
-                if backend_state == 'Running':
+                backend_state = status.get("BackendState", "")
+                if backend_state == "Running":
                     # Get our Tailscale IP
-                    self_peer = status.get('Self', {})
-                    tailscale_ips = self_peer.get('TailscaleIPs', [])
+                    self_peer = status.get("Self", {})
+                    tailscale_ips = self_peer.get("TailscaleIPs", [])
                     if tailscale_ips:
                         return True, tailscale_ips[0]
                 return False, None
@@ -671,24 +722,23 @@ class CrowdCountMain:
             timeout: Max seconds to wait before killing provisioning.
                      None = wait indefinitely (first-time setup).
         """
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("STARTING PROVISIONING MODE")
-        print("="*60)
+        print("=" * 60)
         print("Device is not connected to WiFi")
         print("Starting Bluetooth provisioning...")
         if timeout:
             print(f"Will retry WiFi in {timeout} seconds if no one connects...")
         else:
             print("Waiting for user to provision via mobile app...")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         provision_script = PROVISIONING_DIR / "provision_manager.py"
 
         try:
             # Run provisioning as a subprocess
             self.current_process = subprocess.Popen(
-                [sys.executable, str(provision_script)],
-                cwd=str(PROVISIONING_DIR)
+                [sys.executable, str(provision_script)], cwd=str(PROVISIONING_DIR)
             )
 
             # Wait for provisioning to complete (with optional timeout)
@@ -720,20 +770,19 @@ class CrowdCountMain:
 
     def run_streaming(self):
         """Run the streaming process"""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("STARTING STREAMING MODE")
-        print("="*60)
+        print("=" * 60)
         print("Device is connected and provisioned")
         print("Starting camera stream...")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         stream_script = STREAM_DIR / "start_stream.sh"
 
         try:
             # Run streaming as a subprocess
             self.current_process = subprocess.Popen(
-                ['/bin/bash', str(stream_script)],
-                cwd=str(STREAM_DIR)
+                ["/bin/bash", str(stream_script)], cwd=str(STREAM_DIR)
             )
 
             # Wait for streaming to complete (runs indefinitely)
@@ -760,6 +809,7 @@ class CrowdCountMain:
 
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""
+
         def signal_handler(sig, frame):
             print("\n⚠ Received shutdown signal")
             self.running = False
@@ -788,13 +838,13 @@ class CrowdCountMain:
         """Main orchestration loop"""
         self.setup_signal_handlers()
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("CROWDCOUNT DEVICE STARTUP")
-        print("="*60)
+        print("=" * 60)
         print(f"Working Directory: {SCRIPT_DIR}")
         if self.device_id:
             print(f"Device ID: {self.device_id}")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         # Authenticate Tailscale on startup (if not already authenticated)
         print("Checking Tailscale authentication...")
@@ -805,7 +855,9 @@ class CrowdCountMain:
         if tailscale_ok:
             self.harden_ssh()
         else:
-            print("⚠ Tailscale not authenticated — keeping regular SSH enabled as fallback")
+            print(
+                "⚠ Tailscale not authenticated — keeping regular SSH enabled as fallback"
+            )
         print()
 
         version_reported = False
@@ -818,9 +870,11 @@ class CrowdCountMain:
             has_config = self.has_device_config()
             tailscale_connected, tailscale_ip = self.check_tailscale_connected()
 
-            print(f"Status Check:")
+            print("Status Check:")
             print(f"  WiFi Connected: {wifi_connected} {f'({ssid})' if ssid else ''}")
-            print(f"  Tailscale: {tailscale_connected} {f'({tailscale_ip})' if tailscale_ip else ''}")
+            print(
+                f"  Tailscale: {tailscale_connected} {f'({tailscale_ip})' if tailscale_ip else ''}"
+            )
             print(f"  Provisioned: {is_provisioned}")
             print(f"  Config Exists: {has_config}")
             print()
@@ -859,7 +913,9 @@ class CrowdCountMain:
                 # Connected and ready → check Tailscale, then stream
                 if not tailscale_connected:
                     self._failed_reach_count += 1
-                    print(f"Decision: WiFi connected but Tailscale not ready ({self._failed_reach_count} consecutive)")
+                    print(
+                        f"Decision: WiFi connected but Tailscale not ready ({self._failed_reach_count} consecutive)"
+                    )
                     self._escalated_recovery()
                     time.sleep(5)
                     continue
@@ -867,7 +923,9 @@ class CrowdCountMain:
                 # Tailscale reports connected — verify server is actually reachable
                 if not self._check_server_reachable():
                     self._failed_reach_count += 1
-                    print(f"⚠ Server unreachable despite Tailscale connected ({self._failed_reach_count} consecutive)")
+                    print(
+                        f"⚠ Server unreachable despite Tailscale connected ({self._failed_reach_count} consecutive)"
+                    )
                     self._escalated_recovery()
                     time.sleep(10)
                     continue

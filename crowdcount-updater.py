@@ -10,7 +10,6 @@ import hashlib
 import hmac as hmac_mod
 import json
 import logging
-import os
 import shutil
 import subprocess
 import time
@@ -41,6 +40,7 @@ logger = logging.getLogger("crowdcount-updater")
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+
 def load_identity() -> tuple:
     """Load device_id and password from device-identity.conf.
 
@@ -54,7 +54,11 @@ def load_identity() -> tuple:
             # Try configparser first
             config = configparser.ConfigParser()
             config.read(path)
-            section = config["DEFAULT"] if "DEFAULT" in config else config[config.sections()[0]]
+            section = (
+                config["DEFAULT"]
+                if "DEFAULT" in config
+                else config[config.sections()[0]]
+            )
             device_id = section.get("DEVICE_ID") or None
             password = section.get("API_PASSWORD") or None
 
@@ -73,11 +77,15 @@ def load_identity() -> tuple:
                 return device_id, password
 
     if device_id and not password:
-        raise RuntimeError(f"Device {device_id} found but API_PASSWORD is empty in device-identity.conf")
+        raise RuntimeError(
+            f"Device {device_id} found but API_PASSWORD is empty in device-identity.conf"
+        )
     raise RuntimeError("Could not load device identity from any known path")
 
 
-def sign_request(device_id: str, password: str, method: str, url: str, body: str) -> dict:
+def sign_request(
+    device_id: str, password: str, method: str, url: str, body: str
+) -> dict:
     """Compute HMAC-SHA256 signature headers (same scheme as stream_to_mediamtx)."""
     from urllib.parse import urlparse
 
@@ -87,7 +95,9 @@ def sign_request(device_id: str, password: str, method: str, url: str, body: str
     nonce = str(uuid.uuid4())
     body_hash = hashlib.sha256(body.encode()).hexdigest()
     string_to_sign = f"{method}\n{path}\n{body_hash}\n{timestamp}\n{nonce}"
-    signature = hmac_mod.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    signature = hmac_mod.new(
+        signing_key, string_to_sign.encode(), hashlib.sha256
+    ).hexdigest()
     return {
         "X-CC-Signature": signature,
         "X-CC-Timestamp": timestamp,
@@ -119,11 +129,13 @@ def get_current_commit() -> str:
 def report_version(device_id: str, password: str, commit_hash: str) -> None:
     """POST the current commit hash to the API server."""
     url = f"{API_BASE_URL}/report_version"
-    payload = json.dumps({
-        "device_id": device_id,
-        "password": password,
-        "commit_hash": commit_hash,
-    })
+    payload = json.dumps(
+        {
+            "device_id": device_id,
+            "password": password,
+            "commit_hash": commit_hash,
+        }
+    )
     headers = {
         "Content-Type": "application/json",
         "Idempotency-Key": str(uuid.uuid4()),
@@ -135,7 +147,9 @@ def report_version(device_id: str, password: str, commit_hash: str) -> None:
         if resp.ok:
             logger.info("Reported version %s to server", commit_hash[:8])
         else:
-            logger.warning("Version report failed (%s): %s", resp.status_code, resp.text)
+            logger.warning(
+                "Version report failed (%s): %s", resp.status_code, resp.text
+            )
     except Exception as exc:
         logger.warning("Could not reach API to report version: %s", exc)
 
@@ -152,7 +166,10 @@ def ensure_root_ssh_config() -> None:
     counter_config = counter_ssh / "config"
 
     # Already set up?
-    if root_config.exists() and "github-crowdcount-counter-ro" in root_config.read_text():
+    if (
+        root_config.exists()
+        and "github-crowdcount-counter-ro" in root_config.read_text()
+    ):
         known_hosts = root_ssh / "known_hosts"
         if known_hosts.exists() and "github.com" in known_hosts.read_text():
             return
@@ -165,7 +182,10 @@ def ensure_root_ssh_config() -> None:
         root_ssh.mkdir(mode=0o700, exist_ok=True)
 
         # Copy SSH config
-        if not root_config.exists() or "github-crowdcount-counter-ro" not in root_config.read_text():
+        if (
+            not root_config.exists()
+            or "github-crowdcount-counter-ro" not in root_config.read_text()
+        ):
             shutil.copy2(counter_config, root_config)
             root_config.chmod(0o600)
             logger.info("Copied SSH config to root from counter user")
@@ -187,7 +207,9 @@ def ensure_root_ssh_config() -> None:
         if not known_hosts.exists() or "github.com" not in known_hosts.read_text():
             result = subprocess.run(
                 ["ssh-keyscan", "github.com"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0 and result.stdout.strip():
                 with open(known_hosts, "a") as f:
@@ -305,6 +327,7 @@ def check_and_update(device_id: str, password: str) -> None:
 
 # ── Main loop ────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     logger.info("CrowdCount updater starting")
 
@@ -325,6 +348,7 @@ def main() -> None:
     while waited < NETWORK_MAX_WAIT:
         try:
             import socket
+
             socket.create_connection(("github.com", 443), timeout=5).close()
             logger.info("Network is up — can reach GitHub")
             break
@@ -334,8 +358,10 @@ def main() -> None:
             time.sleep(NETWORK_CHECK_INTERVAL)
             waited += NETWORK_CHECK_INTERVAL
     else:
-        logger.warning("No network after %d minutes — will keep trying in background",
-                        NETWORK_MAX_WAIT // 60)
+        logger.warning(
+            "No network after %d minutes — will keep trying in background",
+            NETWORK_MAX_WAIT // 60,
+        )
 
     report_version(device_id, password, commit)
 

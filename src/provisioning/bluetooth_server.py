@@ -12,15 +12,15 @@ import threading
 import time
 
 # GATT UUIDs - these are fixed for all CrowdCount devices
-SERVICE_UUID = 'e3e64d66-1db1-11ec-9621-0242ac130002'
-AUTH_UUID = 'e3e64d67-1db1-11ec-9621-0242ac130002'
-SSID_UUID = 'e3e64f08-1db1-11ec-9621-0242ac130002'
-PASSWORD_UUID = 'e3e6515a-1db1-11ec-9621-0242ac130002'
-TAILSCALE_KEY_UUID = 'e3e65276-1db1-11ec-9621-0242ac130002'
-SERVER_IP_UUID = 'e3e65398-1db1-11ec-9621-0242ac130002'
-STREAM_NAME_UUID = 'e3e654ba-1db1-11ec-9621-0242ac130002'
-STATUS_UUID = 'e3e655dc-1db1-11ec-9621-0242ac130002'
-WIFI_SCAN_UUID = 'e3e656fe-1db1-11ec-9621-0242ac130002'
+SERVICE_UUID = "e3e64d66-1db1-11ec-9621-0242ac130002"
+AUTH_UUID = "e3e64d67-1db1-11ec-9621-0242ac130002"
+SSID_UUID = "e3e64f08-1db1-11ec-9621-0242ac130002"
+PASSWORD_UUID = "e3e6515a-1db1-11ec-9621-0242ac130002"
+TAILSCALE_KEY_UUID = "e3e65276-1db1-11ec-9621-0242ac130002"
+SERVER_IP_UUID = "e3e65398-1db1-11ec-9621-0242ac130002"
+STREAM_NAME_UUID = "e3e654ba-1db1-11ec-9621-0242ac130002"
+STATUS_UUID = "e3e655dc-1db1-11ec-9621-0242ac130002"
+WIFI_SCAN_UUID = "e3e656fe-1db1-11ec-9621-0242ac130002"
 
 # Status codes for mobile app
 STATUS_PENDING = 0
@@ -31,15 +31,15 @@ STATUS_SUCCESS = 4
 STATUS_WIFI_CONNECTED = 5
 
 # Default server IP (Tailscale IP of MediaMTX server)
-DEFAULT_SERVER_IP = '100.72.64.80'
+DEFAULT_SERVER_IP = "100.72.64.80"
 
 # BlueZ D-Bus constants
-BLUEZ_SERVICE = 'org.bluez'
-GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
-LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
-GATT_SERVICE_IFACE = 'org.bluez.GattService1'
-GATT_CHARACTERISTIC_IFACE = 'org.bluez.GattCharacteristic1'
-LE_ADVERTISEMENT_IFACE = 'org.bluez.LEAdvertisement1'
+BLUEZ_SERVICE = "org.bluez"
+GATT_MANAGER_IFACE = "org.bluez.GattManager1"
+LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
+GATT_SERVICE_IFACE = "org.bluez.GattService1"
+GATT_CHARACTERISTIC_IFACE = "org.bluez.GattCharacteristic1"
+LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
 
 
 class ProvisioningData:
@@ -68,7 +68,7 @@ class ProvisioningData:
 
         # WiFi scan state (shared with WifiScanCharacteristic)
         self._wifi_scan_thread = None
-        self._cached_scan_results = b''
+        self._cached_scan_results = b""
         self._scan_in_progress = False
 
         # Status for mobile app feedback
@@ -108,7 +108,6 @@ class ProvisioningData:
         if self._scan_in_progress:
             return
         import subprocess
-        import json
 
         self._scan_in_progress = True
 
@@ -116,22 +115,25 @@ class ProvisioningData:
             print("📡 Scanning for WiFi networks (background)...")
             try:
                 subprocess.run(
-                    ['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
-                    capture_output=True, timeout=5
+                    ["sudo", "nmcli", "dev", "wifi", "rescan"],
+                    capture_output=True,
+                    timeout=5,
                 )
                 time.sleep(2)
 
                 result = subprocess.run(
-                    ['sudo', 'nmcli', '-t', '-f', 'SSID,SIGNAL', 'dev', 'wifi', 'list'],
-                    capture_output=True, text=True, timeout=10
+                    ["sudo", "nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
 
                 networks = []
                 seen = set()
-                for line in result.stdout.strip().split('\n'):
+                for line in result.stdout.strip().split("\n"):
                     if not line.strip():
                         continue
-                    parts = line.split(':')
+                    parts = line.split(":")
                     if len(parts) >= 2:
                         ssid = parts[0].strip()
                         try:
@@ -149,12 +151,12 @@ class ProvisioningData:
                 # Format: "SSID|signal\nSSID2|signal2\n..."
                 # ~25 bytes per entry vs ~40 for JSON = fits 15 networks easily
                 compact = "\n".join(f"{n['ssid']}|{n['signal']}" for n in networks)
-                self._cached_scan_results = compact.encode('utf-8')
+                self._cached_scan_results = compact.encode("utf-8")
                 print(f"  Scan complete: {len(networks)} networks found")
 
             except Exception as e:
                 print(f"✗ WiFi scan failed: {e}")
-                self._cached_scan_results = b''
+                self._cached_scan_results = b""
             finally:
                 self._scan_in_progress = False
 
@@ -186,7 +188,7 @@ class ProvisioningData:
             print("✗ Not authenticated - ignoring Tailscale key")
             return
         self.tailscale_auth_key = key
-        print(f"  Received Tailscale auth key")
+        print("  Received Tailscale auth key")
         self._check_complete()
 
     def set_server_ip(self, ip):
@@ -215,12 +217,13 @@ class ProvisioningData:
         """Check if all required data has been received"""
         # Only WiFi credentials and server IP are required
         # Tailscale key is optional (device may already be configured)
-        if (self.authenticated and
-            self.wifi_ssid and
-            self.wifi_password and
-            self.server_ip and
-            not self._provisioning_in_progress):
-
+        if (
+            self.authenticated
+            and self.wifi_ssid
+            and self.wifi_password
+            and self.server_ip
+            and not self._provisioning_in_progress
+        ):
             self._provisioning_in_progress = True
             print("✓ All required provisioning data received!")
             if self.tailscale_auth_key:
@@ -236,6 +239,7 @@ class ProvisioningData:
         Running on_complete in a thread keeps the GLib main loop free so BLE
         stays responsive (iOS can read Status characteristic during provisioning).
         """
+
         def _run():
             # Wait for any in-progress WiFi scan to finish before provisioning
             # starts toggling the WiFi radio
@@ -254,7 +258,7 @@ class Characteristic(dbus.service.Object):
     """Base GATT Characteristic class"""
 
     def __init__(self, bus, index, uuid, flags, service):
-        self.path = service.path + '/char' + str(index)
+        self.path = service.path + "/char" + str(index)
         self.bus = bus
         self.uuid = uuid
         self.flags = flags
@@ -264,35 +268,35 @@ class Characteristic(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_CHARACTERISTIC_IFACE: {
-                'Service': dbus.ObjectPath(self.service.path),
-                'UUID': dbus.String(self.uuid),
-                'Flags': dbus.Array(self.flags, signature='s'),
-                'Descriptors': dbus.Array([], signature='o')
+                "Service": dbus.ObjectPath(self.service.path),
+                "UUID": dbus.String(self.uuid),
+                "Flags": dbus.Array(self.flags, signature="s"),
+                "Descriptors": dbus.Array([], signature="o"),
             }
         }
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
-    @dbus.service.method('org.freedesktop.DBus.Properties',
-                        in_signature='s',
-                        out_signature='a{sv}')
+    @dbus.service.method(
+        "org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}"
+    )
     def GetAll(self, interface):
         if interface != GATT_CHARACTERISTIC_IFACE:
             raise dbus.exceptions.DBusException(
-                'org.freedesktop.DBus.Error.InvalidArgs',
-                'Unknown interface')
+                "org.freedesktop.DBus.Error.InvalidArgs", "Unknown interface"
+            )
 
         return self.get_properties()[GATT_CHARACTERISTIC_IFACE]
 
-    @dbus.service.method(GATT_CHARACTERISTIC_IFACE,
-                        in_signature='a{sv}',
-                        out_signature='ay')
+    @dbus.service.method(
+        GATT_CHARACTERISTIC_IFACE, in_signature="a{sv}", out_signature="ay"
+    )
     def ReadValue(self, options):
         print(f"ReadValue called on {self.uuid}")
         return []
 
-    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='aya{sv}')
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature="aya{sv}")
     def WriteValue(self, value, options):
         print(f"WriteValue called on {self.uuid}")
 
@@ -301,12 +305,11 @@ class AuthCharacteristic(Characteristic):
     """Authentication characteristic - client writes device secret"""
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, AUTH_UUID, ['write'], service)
+        Characteristic.__init__(self, bus, index, AUTH_UUID, ["write"], service)
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        secret = bytes(value).decode('utf-8', errors='ignore')
+        secret = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_auth_secret(secret)
 
 
@@ -314,12 +317,11 @@ class WifiSSIDCharacteristic(Characteristic):
     """WiFi SSID characteristic"""
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, SSID_UUID, ['write'], service)
+        Characteristic.__init__(self, bus, index, SSID_UUID, ["write"], service)
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        ssid = bytes(value).decode('utf-8', errors='ignore')
+        ssid = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_wifi_ssid(ssid)
 
 
@@ -327,12 +329,11 @@ class WifiPasswordCharacteristic(Characteristic):
     """WiFi password characteristic"""
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, PASSWORD_UUID, ['write'], service)
+        Characteristic.__init__(self, bus, index, PASSWORD_UUID, ["write"], service)
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        password = bytes(value).decode('utf-8', errors='ignore')
+        password = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_wifi_password(password)
 
 
@@ -341,11 +342,12 @@ class TailscaleKeyCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service, provisioning_data):
         Characteristic.__init__(
-            self, bus, index, TAILSCALE_KEY_UUID, ['write'], service)
+            self, bus, index, TAILSCALE_KEY_UUID, ["write"], service
+        )
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        key = bytes(value).decode('utf-8', errors='ignore')
+        key = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_tailscale_key(key)
 
 
@@ -353,12 +355,11 @@ class ServerIPCharacteristic(Characteristic):
     """Server IP characteristic"""
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, SERVER_IP_UUID, ['write'], service)
+        Characteristic.__init__(self, bus, index, SERVER_IP_UUID, ["write"], service)
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        ip = bytes(value).decode('utf-8', errors='ignore')
+        ip = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_server_ip(ip)
 
 
@@ -366,12 +367,11 @@ class StreamNameCharacteristic(Characteristic):
     """Stream name characteristic"""
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, STREAM_NAME_UUID, ['write'], service)
+        Characteristic.__init__(self, bus, index, STREAM_NAME_UUID, ["write"], service)
         self.provisioning_data = provisioning_data
 
     def WriteValue(self, value, options):
-        name = bytes(value).decode('utf-8', errors='ignore')
+        name = bytes(value).decode("utf-8", errors="ignore")
         self.provisioning_data.set_stream_name(name)
 
 
@@ -380,13 +380,14 @@ class StatusCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service, provisioning_data):
         Characteristic.__init__(
-            self, bus, index, STATUS_UUID, ['read', 'notify'], service)
+            self, bus, index, STATUS_UUID, ["read", "notify"], service
+        )
         self.provisioning_data = provisioning_data
 
     def ReadValue(self, options):
         status = self.provisioning_data.status
         print(f"  Status read: {status}")
-        return dbus.Array([dbus.Byte(status)], signature='y')
+        return dbus.Array([dbus.Byte(status)], signature="y")
 
 
 class WifiScanCharacteristic(Characteristic):
@@ -398,27 +399,28 @@ class WifiScanCharacteristic(Characteristic):
     """
 
     def __init__(self, bus, index, service, provisioning_data):
-        Characteristic.__init__(
-            self, bus, index, WIFI_SCAN_UUID, ['read'], service)
+        Characteristic.__init__(self, bus, index, WIFI_SCAN_UUID, ["read"], service)
         self.provisioning_data = provisioning_data
 
     def ReadValue(self, options):
         if not self.provisioning_data.authenticated:
             print("✗ Not authenticated - ignoring WiFi scan request")
-            return dbus.Array([], signature='y')
+            return dbus.Array([], signature="y")
 
         cached = self.provisioning_data._cached_scan_results
         # Handle Read Blob offset for long characteristics (data > MTU)
-        offset = int(options.get('offset', 0))
+        offset = int(options.get("offset", 0))
         chunk = cached[offset:]
-        print(f"  Returning WiFi scan offset={offset} ({len(chunk)}/{len(cached)} bytes)")
-        return dbus.Array([dbus.Byte(b) for b in chunk], signature='y')
+        print(
+            f"  Returning WiFi scan offset={offset} ({len(chunk)}/{len(cached)} bytes)"
+        )
+        return dbus.Array([dbus.Byte(b) for b in chunk], signature="y")
 
 
 class ProvisioningService(dbus.service.Object):
     """Main GATT service for provisioning"""
 
-    PATH_BASE = '/org/bluez/crowdcount/service'
+    PATH_BASE = "/org/bluez/crowdcount/service"
 
     def __init__(self, bus, index, provisioning_data):
         self.path = self.PATH_BASE + str(index)
@@ -431,10 +433,16 @@ class ProvisioningService(dbus.service.Object):
         # Add characteristics
         self.add_characteristic(AuthCharacteristic(bus, 0, self, provisioning_data))
         self.add_characteristic(WifiSSIDCharacteristic(bus, 1, self, provisioning_data))
-        self.add_characteristic(WifiPasswordCharacteristic(bus, 2, self, provisioning_data))
-        self.add_characteristic(TailscaleKeyCharacteristic(bus, 3, self, provisioning_data))
+        self.add_characteristic(
+            WifiPasswordCharacteristic(bus, 2, self, provisioning_data)
+        )
+        self.add_characteristic(
+            TailscaleKeyCharacteristic(bus, 3, self, provisioning_data)
+        )
         self.add_characteristic(ServerIPCharacteristic(bus, 4, self, provisioning_data))
-        self.add_characteristic(StreamNameCharacteristic(bus, 5, self, provisioning_data))
+        self.add_characteristic(
+            StreamNameCharacteristic(bus, 5, self, provisioning_data)
+        )
         self.add_characteristic(StatusCharacteristic(bus, 6, self, provisioning_data))
         self.add_characteristic(WifiScanCharacteristic(bus, 7, self, provisioning_data))
 
@@ -444,25 +452,26 @@ class ProvisioningService(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_SERVICE_IFACE: {
-                'UUID': dbus.String(self.uuid),
-                'Primary': dbus.Boolean(self.primary),
-                'Characteristics': dbus.Array(
+                "UUID": dbus.String(self.uuid),
+                "Primary": dbus.Boolean(self.primary),
+                "Characteristics": dbus.Array(
                     [dbus.ObjectPath(char.path) for char in self.characteristics],
-                    signature='o')
+                    signature="o",
+                ),
             }
         }
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
-    @dbus.service.method('org.freedesktop.DBus.Properties',
-                        in_signature='s',
-                        out_signature='a{sv}')
+    @dbus.service.method(
+        "org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}"
+    )
     def GetAll(self, interface):
         if interface != GATT_SERVICE_IFACE:
             raise dbus.exceptions.DBusException(
-                'org.freedesktop.DBus.Error.InvalidArgs',
-                'Unknown interface')
+                "org.freedesktop.DBus.Error.InvalidArgs", "Unknown interface"
+            )
 
         return self.get_properties()[GATT_SERVICE_IFACE]
 
@@ -471,7 +480,7 @@ class Application(dbus.service.Object):
     """GATT Application"""
 
     def __init__(self, bus, provisioning_data):
-        self.path = '/'
+        self.path = "/"
         self.services = []
         dbus.service.Object.__init__(self, bus, self.path)
 
@@ -484,8 +493,9 @@ class Application(dbus.service.Object):
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
-    @dbus.service.method('org.freedesktop.DBus.ObjectManager',
-                        out_signature='a{oa{sa{sv}}}')
+    @dbus.service.method(
+        "org.freedesktop.DBus.ObjectManager", out_signature="a{oa{sa{sv}}}"
+    )
     def GetManagedObjects(self):
         response = {}
 
@@ -500,12 +510,12 @@ class Application(dbus.service.Object):
 class Advertisement(dbus.service.Object):
     """BLE Advertisement"""
 
-    PATH_BASE = '/org/bluez/crowdcount/advertisement'
+    PATH_BASE = "/org/bluez/crowdcount/advertisement"
 
     def __init__(self, bus, index, device_name):
         self.path = self.PATH_BASE + str(index)
         self.bus = bus
-        self.ad_type = 'peripheral'
+        self.ad_type = "peripheral"
         self.service_uuids = [SERVICE_UUID]
         self.local_name = device_name
         self.include_tx_power = True
@@ -513,30 +523,30 @@ class Advertisement(dbus.service.Object):
 
     def get_properties(self):
         properties = dict()
-        properties['Type'] = self.ad_type
+        properties["Type"] = self.ad_type
         if self.service_uuids is not None:
-            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+            properties["ServiceUUIDs"] = dbus.Array(self.service_uuids, signature="s")
         if self.local_name is not None:
-            properties['LocalName'] = dbus.String(self.local_name)
+            properties["LocalName"] = dbus.String(self.local_name)
         if self.include_tx_power:
-            properties['Includes'] = dbus.Array(["tx-power"], signature='s')
+            properties["Includes"] = dbus.Array(["tx-power"], signature="s")
         return {LE_ADVERTISEMENT_IFACE: properties}
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
-    @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature='', out_signature='')
+    @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature="", out_signature="")
     def Release(self):
         print("Advertisement released")
 
-    @dbus.service.method('org.freedesktop.DBus.Properties',
-                        in_signature='s',
-                        out_signature='a{sv}')
+    @dbus.service.method(
+        "org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}"
+    )
     def GetAll(self, interface):
         if interface != LE_ADVERTISEMENT_IFACE:
             raise dbus.exceptions.DBusException(
-                'org.freedesktop.DBus.Error.InvalidArgs',
-                'Unknown interface')
+                "org.freedesktop.DBus.Error.InvalidArgs", "Unknown interface"
+            )
         return self.get_properties()[LE_ADVERTISEMENT_IFACE]
 
 
@@ -557,8 +567,10 @@ class BluetoothProvisioningServer:
 
     def find_adapter(self):
         """Find Bluetooth adapter"""
-        remote_om = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, '/'),
-                                   'org.freedesktop.DBus.ObjectManager')
+        remote_om = dbus.Interface(
+            self.bus.get_object(BLUEZ_SERVICE, "/"),
+            "org.freedesktop.DBus.ObjectManager",
+        )
         objects = remote_om.GetManagedObjects()
 
         for o, props in objects.items():
@@ -569,7 +581,7 @@ class BluetoothProvisioningServer:
 
     def start(self):
         """Start the Bluetooth provisioning server"""
-        print(f"🔵 Starting Bluetooth provisioning server")
+        print("🔵 Starting Bluetooth provisioning server")
         print(f"   Device name: {self.device_identity.get_bluetooth_name()}")
 
         # Find adapter
@@ -581,15 +593,14 @@ class BluetoothProvisioningServer:
         print(f"   Adapter path: {adapter_path}")
 
         # Get adapter interface for configuration
-        adapter_props = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
-                                       'org.freedesktop.DBus.Properties')
-
-        adapter_obj = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, adapter_path),
-                                     'org.bluez.Adapter1')
+        adapter_props = dbus.Interface(
+            self.bus.get_object(BLUEZ_SERVICE, adapter_path),
+            "org.freedesktop.DBus.Properties",
+        )
 
         # Check current power state
         try:
-            powered = adapter_props.Get('org.bluez.Adapter1', 'Powered')
+            powered = adapter_props.Get("org.bluez.Adapter1", "Powered")
             print(f"   Adapter powered: {powered}")
         except Exception as e:
             print(f"   Could not check power state: {e}")
@@ -599,17 +610,22 @@ class BluetoothProvisioningServer:
         if not powered:
             print("   Powering on Bluetooth adapter...")
             import subprocess
+
             try:
                 # Try using rfkill first to unblock
-                subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)
+                subprocess.run(
+                    ["rfkill", "unblock", "bluetooth"], check=False, capture_output=True
+                )
                 time.sleep(1)
 
                 # Try bluetoothctl power on
-                subprocess.run(['bluetoothctl', 'power', 'on'], check=False, capture_output=True)
+                subprocess.run(
+                    ["bluetoothctl", "power", "on"], check=False, capture_output=True
+                )
                 time.sleep(1)
 
                 # Verify it's on
-                powered = adapter_props.Get('org.bluez.Adapter1', 'Powered')
+                powered = adapter_props.Get("org.bluez.Adapter1", "Powered")
                 print(f"   Adapter powered after commands: {powered}")
 
                 if not powered:
@@ -619,27 +635,34 @@ class BluetoothProvisioningServer:
 
         # Make adapter discoverable
         try:
-            discoverable = adapter_props.Get('org.bluez.Adapter1', 'Discoverable')
+            discoverable = adapter_props.Get("org.bluez.Adapter1", "Discoverable")
             print(f"   Adapter discoverable: {discoverable}")
             if not discoverable:
                 print("   Making adapter discoverable...")
-                adapter_props.Set('org.bluez.Adapter1', 'Discoverable', dbus.Boolean(True))
-                adapter_props.Set('org.bluez.Adapter1', 'DiscoverableTimeout', dbus.UInt32(0))
+                adapter_props.Set(
+                    "org.bluez.Adapter1", "Discoverable", dbus.Boolean(True)
+                )
+                adapter_props.Set(
+                    "org.bluez.Adapter1", "DiscoverableTimeout", dbus.UInt32(0)
+                )
         except Exception as e:
             print(f"   Could not set discoverable: {e}")
 
         gatt_manager = dbus.Interface(
-            self.bus.get_object(BLUEZ_SERVICE, adapter_path),
-            GATT_MANAGER_IFACE)
+            self.bus.get_object(BLUEZ_SERVICE, adapter_path), GATT_MANAGER_IFACE
+        )
 
         ad_manager = dbus.Interface(
             self.bus.get_object(BLUEZ_SERVICE, adapter_path),
-            LE_ADVERTISING_MANAGER_IFACE)
+            LE_ADVERTISING_MANAGER_IFACE,
+        )
 
         # Check for existing advertisements
         try:
-            remote_om = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE, '/'),
-                                       'org.freedesktop.DBus.ObjectManager')
+            remote_om = dbus.Interface(
+                self.bus.get_object(BLUEZ_SERVICE, "/"),
+                "org.freedesktop.DBus.ObjectManager",
+            )
             objects = remote_om.GetManagedObjects()
             print("   Checking for existing advertisements...")
             for path, interfaces in objects.items():
@@ -651,17 +674,23 @@ class BluetoothProvisioningServer:
         # Register GATT application
         app = Application(self.bus, self.provisioning_data)
         print(f"   Registering GATT app at path: {app.get_path()}")
-        gatt_manager.RegisterApplication(app.get_path(), {},
-                                        reply_handler=self._register_app_cb,
-                                        error_handler=self._register_app_error_cb)
+        gatt_manager.RegisterApplication(
+            app.get_path(),
+            {},
+            reply_handler=self._register_app_cb,
+            error_handler=self._register_app_error_cb,
+        )
 
         # Register advertisement
         adv = Advertisement(self.bus, 0, self.device_identity.get_bluetooth_name())
         print(f"   Registering advertisement at path: {adv.get_path()}")
         print(f"   Advertisement properties: {adv.get_properties()}")
-        ad_manager.RegisterAdvertisement(adv.get_path(), {},
-                                        reply_handler=self._register_ad_cb,
-                                        error_handler=self._register_ad_error_cb)
+        ad_manager.RegisterAdvertisement(
+            adv.get_path(),
+            {},
+            reply_handler=self._register_ad_cb,
+            error_handler=self._register_ad_error_cb,
+        )
 
         print("✓ Bluetooth server started")
         print("   Waiting for mobile app to connect...")
@@ -696,8 +725,12 @@ class BluetoothProvisioningServer:
         print(f"⚠ Failed to register advertisement: {error}")
         print(f"   Error type: {type(error)}")
         print(f"   Error name: {getattr(error, 'get_dbus_name', lambda: 'N/A')()}")
-        print(f"   Error message: {getattr(error, 'get_dbus_message', lambda: 'N/A')()}")
-        print("  GATT server is still running - device may be discoverable without advertisement")
+        print(
+            f"   Error message: {getattr(error, 'get_dbus_message', lambda: 'N/A')()}"
+        )
+        print(
+            "  GATT server is still running - device may be discoverable without advertisement"
+        )
         # Don't quit - GATT server is still functional
 
 

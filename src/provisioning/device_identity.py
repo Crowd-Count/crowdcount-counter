@@ -7,18 +7,20 @@ Reads device ID and secret from boot partition for QR code provisioning
 import os
 import hmac
 import configparser
-from pathlib import Path
 
 # Possible locations for device identity file
 # Get the real user's home directory even when running with sudo
-_real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
-_user_home = os.path.expanduser(f'~{_real_user}') if _real_user else os.path.expanduser('~')
+_real_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+_user_home = (
+    os.path.expanduser(f"~{_real_user}") if _real_user else os.path.expanduser("~")
+)
 
 IDENTITY_PATHS = [
-    '/boot/firmware/device-identity.conf',  # Primary: Boot partition (Pi Zero 2W) - survives reflash
-    '/boot/device-identity.conf',           # Secondary: Legacy boot partition (older models, just in case)
-    f'{_user_home}/crowdcount-counter/boot/device-identity.conf',  # Fallback: Project directory (development)
+    "/boot/firmware/device-identity.conf",  # Primary: Boot partition (Pi Zero 2W) - survives reflash
+    "/boot/device-identity.conf",  # Secondary: Legacy boot partition (older models, just in case)
+    f"{_user_home}/crowdcount-counter/boot/device-identity.conf",  # Fallback: Project directory (development)
 ]
+
 
 class DeviceIdentity:
     """Manages device identity for provisioning"""
@@ -49,18 +51,18 @@ class DeviceIdentity:
             config.read(path)
 
             # Support both [DEFAULT] section and no section
-            if 'DEFAULT' in config:
-                section = config['DEFAULT']
+            if "DEFAULT" in config:
+                section = config["DEFAULT"]
             elif config.sections():
                 section = config[config.sections()[0]]
             else:
                 print(f"Warning: Config file {path} has no sections")
                 section = {}
 
-            self.device_id = section.get('DEVICE_ID', 'CC-UNKNOWN')
-            self.device_secret = section.get('DEVICE_SECRET', '')
-            self.manufacturing_date = section.get('MANUFACTURING_DATE', 'unknown')
-            self.model = section.get('MODEL', 'counter-v3')
+            self.device_id = section.get("DEVICE_ID", "CC-UNKNOWN")
+            self.device_secret = section.get("DEVICE_SECRET", "")
+            self.manufacturing_date = section.get("MANUFACTURING_DATE", "unknown")
+            self.model = section.get("MODEL", "counter-v3")
 
             # Validate device_id format (should be alphanumeric with dashes)
             if not self.device_id or len(self.device_id) > 32:
@@ -68,12 +70,12 @@ class DeviceIdentity:
 
         except configparser.Error as e:
             print(f"Error parsing identity file {path}: {e}")
-            self.device_id = 'CC-UNKNOWN'
-            self.device_secret = ''
+            self.device_id = "CC-UNKNOWN"
+            self.device_secret = ""
         except Exception as e:
             print(f"Unexpected error reading identity file {path}: {e}")
-            self.device_id = 'CC-UNKNOWN'
-            self.device_secret = ''
+            self.device_id = "CC-UNKNOWN"
+            self.device_secret = ""
 
     def get_bluetooth_name(self):
         """Get the Bluetooth advertised name"""

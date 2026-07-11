@@ -7,4 +7,4 @@ This package contains:
 - logging_config: Shared logging configuration
 """
 
-__version__ = '1.0.0'
+__version__ = "1.0.0"

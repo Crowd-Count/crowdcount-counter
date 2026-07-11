@@ -7,13 +7,13 @@ Handles WiFi and Tailscale configuration
 import subprocess
 import time
 import os
-import re
 import requests
 from pathlib import Path
 
 # Import video config
 try:
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from video_config import VIDEO_FPS, VIDEO_WIDTH, VIDEO_HEIGHT
 except ImportError:
@@ -44,7 +44,7 @@ class NetworkSetup:
             return False
 
         # WiFi SSIDs are max 32 bytes
-        if len(ssid.encode('utf-8')) > 32:
+        if len(ssid.encode("utf-8")) > 32:
             return False
 
         return True
@@ -73,8 +73,8 @@ class NetworkSetup:
             return False
 
         # Tailscale auth keys start with 'tskey-auth-' or 'tskey-'
-        if not (auth_key.startswith('tskey-auth-') or auth_key.startswith('tskey-')):
-            print(f"Warning: Auth key doesn't match expected Tailscale format")
+        if not (auth_key.startswith("tskey-auth-") or auth_key.startswith("tskey-")):
+            print("Warning: Auth key doesn't match expected Tailscale format")
             return False
 
         # Check reasonable length (Tailscale keys are typically 40-60+ chars)
@@ -94,7 +94,7 @@ class NetworkSetup:
             return False
 
         # Basic IPv4 validation
-        parts = ip.split('.')
+        parts = ip.split(".")
         if len(parts) != 4:
             return False
 
@@ -123,22 +123,28 @@ class NetworkSetup:
 
         # SECURITY: Validate inputs to prevent command injection
         if not self._sanitize_ssid(ssid):
-            print(f"✗ Invalid SSID format or contains dangerous characters")
+            print("✗ Invalid SSID format or contains dangerous characters")
             return False
 
         if not self._sanitize_password(password):
-            print(f"✗ Invalid password format or contains dangerous characters")
+            print("✗ Invalid password format or contains dangerous characters")
             return False
 
         try:
             # Turn WiFi off and on to ensure clean state
             try:
-                subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'off'],
-                             capture_output=True, timeout=10)
+                subprocess.run(
+                    ["sudo", "nmcli", "radio", "wifi", "off"],
+                    capture_output=True,
+                    timeout=10,
+                )
                 time.sleep(2)
             finally:
-                subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'],
-                             capture_output=True, timeout=10)
+                subprocess.run(
+                    ["sudo", "nmcli", "radio", "wifi", "on"],
+                    capture_output=True,
+                    timeout=10,
+                )
 
             # Wait for WiFi radio to come up and scan for networks
             # Pi Zero 2W can be slow to scan - wait until we see the target SSID
@@ -149,12 +155,16 @@ class NetworkSetup:
             while time.time() - scan_start < scan_timeout:
                 try:
                     scan_result = subprocess.run(
-                        ['sudo', 'nmcli', '-t', '-f', 'SSID', 'dev', 'wifi', 'list'],
-                        capture_output=True, text=True, timeout=5
+                        ["sudo", "nmcli", "-t", "-f", "SSID", "dev", "wifi", "list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
                     )
                     if ssid in scan_result.stdout:
                         network_found = True
-                        print(f"  ✓ Network '{ssid}' found after {time.time() - scan_start:.0f}s")
+                        print(
+                            f"  ✓ Network '{ssid}' found after {time.time() - scan_start:.0f}s"
+                        )
                         break
                 except Exception:
                     pass
@@ -162,37 +172,44 @@ class NetworkSetup:
 
             if not network_found:
                 # Force a rescan and try once more
-                print(f"  Network not found in scan, forcing rescan...")
-                subprocess.run(['sudo', 'nmcli', 'dev', 'wifi', 'rescan'],
-                             capture_output=True, timeout=5)
+                print("  Network not found in scan, forcing rescan...")
+                subprocess.run(
+                    ["sudo", "nmcli", "dev", "wifi", "rescan"],
+                    capture_output=True,
+                    timeout=5,
+                )
                 time.sleep(5)
 
             # Delete any existing connection profiles for this SSID to avoid
             # duplicates (MyNetwork, MyNetwork-1, MyNetwork-2, etc.)
-            subprocess.run(['sudo', 'nmcli', 'connection', 'delete', ssid],
-                         capture_output=True, timeout=10)  # Ignore errors if none exist
+            subprocess.run(
+                ["sudo", "nmcli", "connection", "delete", ssid],
+                capture_output=True,
+                timeout=10,
+            )  # Ignore errors if none exist
 
             # Connect to network
             result = subprocess.run(
-                ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
-                 'password', password],
+                ["sudo", "nmcli", "dev", "wifi", "connect", ssid, "password", password],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
 
             if result.returncode == 0:
                 # Verify we actually have connectivity (IP address assigned)
-                print(f"  nmcli reports connected, verifying connectivity...")
+                print("  nmcli reports connected, verifying connectivity...")
                 verify_timeout = 15  # seconds
                 verify_start = time.time()
                 while time.time() - verify_start < verify_timeout:
                     try:
                         ip_result = subprocess.run(
-                            ['ip', '-4', 'addr', 'show', 'wlan0'],
-                            capture_output=True, text=True, timeout=5
+                            ["ip", "-4", "addr", "show", "wlan0"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
                         )
-                        if 'inet ' in ip_result.stdout:
+                        if "inet " in ip_result.stdout:
                             print(f"✓ Connected to WiFi: {ssid} (IP assigned)")
                             self.wifi_connected = True
                             self._save_wifi_config(ssid, password)
@@ -202,7 +219,7 @@ class NetworkSetup:
                     time.sleep(2)
 
                 # nmcli said success but no IP - might still be connecting
-                print(f"⚠ Connected but no IP yet, assuming success")
+                print("⚠ Connected but no IP yet, assuming success")
                 self.wifi_connected = True
                 self._save_wifi_config(ssid, password)
                 return True
@@ -229,7 +246,7 @@ class NetworkSetup:
             bool: True if connection successful
         """
         if not hostname:
-            hostname = self.device_id.lower().replace('_', '-')
+            hostname = self.device_id.lower().replace("_", "-")
 
         print(f"🔐 Joining Tailscale network as {hostname}")
 
@@ -240,8 +257,7 @@ class NetworkSetup:
 
         try:
             # Check if Tailscale is installed
-            subprocess.run(['which', 'tailscale'], check=True,
-                         capture_output=True)
+            subprocess.run(["which", "tailscale"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
             print("✗ Tailscale not installed. Run setup_pi.sh first.")
             return False
@@ -249,17 +265,23 @@ class NetworkSetup:
         try:
             # Join Tailscale network
             result = subprocess.run(
-                ['sudo', 'tailscale', 'up',
-                 '--authkey', auth_key,
-                 '--hostname', hostname,
-                 '--accept-routes'],
+                [
+                    "sudo",
+                    "tailscale",
+                    "up",
+                    "--authkey",
+                    auth_key,
+                    "--hostname",
+                    hostname,
+                    "--accept-routes",
+                ],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
             )
 
             if result.returncode == 0:
-                print(f"✓ Joined Tailscale network")
+                print("✓ Joined Tailscale network")
 
                 # Get Tailscale IP
                 time.sleep(3)
@@ -286,10 +308,7 @@ class NetworkSetup:
         """Get the Tailscale IP address"""
         try:
             result = subprocess.run(
-                ['tailscale', 'ip', '-4'],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
                 return result.stdout.strip()
@@ -301,8 +320,8 @@ class NetworkSetup:
         """Save WiFi configuration for future reconnection on boot"""
         # Save to boot partition (survives reflash) - primary location
         boot_locations = [
-            Path('/boot/firmware/wifi-credentials.conf'),
-            Path('/boot/wifi-credentials.conf'),
+            Path("/boot/firmware/wifi-credentials.conf"),
+            Path("/boot/wifi-credentials.conf"),
         ]
 
         saved = False
@@ -310,9 +329,11 @@ class NetworkSetup:
             try:
                 config_dir = config_file.parent
                 if config_dir.exists():
-                    with open(config_file, 'w') as f:
-                        f.write(f"# CrowdCount WiFi Credentials\n")
-                        f.write(f"# Auto-saved on {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    with open(config_file, "w") as f:
+                        f.write("# CrowdCount WiFi Credentials\n")
+                        f.write(
+                            f"# Auto-saved on {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        )
                         f.write(f"WIFI_SSID={ssid}\n")
                         f.write(f"WIFI_PASSWORD={password}\n")
                     # Restrict permissions (root only)
@@ -326,12 +347,12 @@ class NetworkSetup:
 
         if not saved:
             # Fallback to user config directory
-            config_dir = Path.home() / '.config' / 'crowdcount'
+            config_dir = Path.home() / ".config" / "crowdcount"
             config_dir.mkdir(parents=True, exist_ok=True)
-            config_file = config_dir / 'wifi-credentials.conf'
+            config_file = config_dir / "wifi-credentials.conf"
             try:
-                with open(config_file, 'w') as f:
-                    f.write(f"# CrowdCount WiFi Credentials\n")
+                with open(config_file, "w") as f:
+                    f.write("# CrowdCount WiFi Credentials\n")
                     f.write(f"WIFI_SSID={ssid}\n")
                     f.write(f"WIFI_PASSWORD={password}\n")
                 os.chmod(config_file, 0o600)
@@ -348,9 +369,9 @@ class NetworkSetup:
         """
         # Check locations in priority order
         credential_locations = [
-            Path('/boot/firmware/wifi-credentials.conf'),
-            Path('/boot/wifi-credentials.conf'),
-            Path.home() / '.config' / 'crowdcount' / 'wifi-credentials.conf',
+            Path("/boot/firmware/wifi-credentials.conf"),
+            Path("/boot/wifi-credentials.conf"),
+            Path.home() / ".config" / "crowdcount" / "wifi-credentials.conf",
         ]
 
         for config_file in credential_locations:
@@ -358,13 +379,13 @@ class NetworkSetup:
                 try:
                     ssid = None
                     password = None
-                    with open(config_file, 'r') as f:
+                    with open(config_file, "r") as f:
                         for line in f:
                             line = line.strip()
-                            if line.startswith('WIFI_SSID='):
-                                ssid = line.split('=', 1)[1]
-                            elif line.startswith('WIFI_PASSWORD='):
-                                password = line.split('=', 1)[1]
+                            if line.startswith("WIFI_SSID="):
+                                ssid = line.split("=", 1)[1]
+                            elif line.startswith("WIFI_PASSWORD="):
+                                password = line.split("=", 1)[1]
 
                     if ssid and password:
                         print(f"✓ Found saved WiFi credentials for: {ssid}")
@@ -407,25 +428,33 @@ class NetworkSetup:
                 try:
                     # First check if already connected to this network
                     result = subprocess.run(
-                        ['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'],
+                        ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=10,
                     )
                     if result.returncode == 0:
-                        for line in result.stdout.strip().split('\n'):
-                            if line.startswith('yes:') and net_ssid in line:
+                        for line in result.stdout.strip().split("\n"):
+                            if line.startswith("yes:") and net_ssid in line:
                                 print(f"✓ Already connected to {net_ssid}")
                                 self.wifi_connected = True
                                 return True
 
                     # Try to connect
                     result = subprocess.run(
-                        ['sudo', 'nmcli', 'dev', 'wifi', 'connect', net_ssid,
-                         'password', net_password],
+                        [
+                            "sudo",
+                            "nmcli",
+                            "dev",
+                            "wifi",
+                            "connect",
+                            net_ssid,
+                            "password",
+                            net_password,
+                        ],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30,
                     )
 
                     if result.returncode == 0:
@@ -436,7 +465,7 @@ class NetworkSetup:
                         print(f"  Connection failed: {result.stderr.strip()}")
 
                 except subprocess.TimeoutExpired:
-                    print(f"  Connection attempt timed out")
+                    print("  Connection attempt timed out")
                 except Exception as e:
                     print(f"  Error: {e}")
 
@@ -446,7 +475,7 @@ class NetworkSetup:
 
             print(f"✗ Failed to connect to {net_ssid} after {max_attempts} attempts")
 
-        print(f"✗ Failed to connect to any WiFi network")
+        print("✗ Failed to connect to any WiFi network")
         return False
 
     def write_device_config(self, server_ip, stream_name=None, tailscale_auth_key=None):
@@ -470,13 +499,13 @@ class NetworkSetup:
             return None
 
         # Find the counter-stream directory
-        script_dir = Path(__file__).parent.parent / 'counter-stream'
-        config_file = script_dir / 'device-info.conf'
+        script_dir = Path(__file__).parent.parent / "counter-stream"
+        config_file = script_dir / "device-info.conf"
 
         print(f"📝 Writing device configuration to {config_file}")
 
         config_content = f"""# Device Configuration File
-# Auto-generated by provisioning system on {time.strftime('%Y-%m-%d %H:%M:%S')}
+# Auto-generated by provisioning system on {time.strftime("%Y-%m-%d %H:%M:%S")}
 
 # Unique identifier for this device/camera (used as stream name)
 DEVICE_ID={stream_name}
@@ -496,16 +525,16 @@ FPS={VIDEO_FPS}
 API_URL=https://api.crowdcount.tech
 
 # Tailscale auth key (for re-authentication if needed)
-TAILSCALE_AUTH_KEY={tailscale_auth_key or ''}
+TAILSCALE_AUTH_KEY={tailscale_auth_key or ""}
 """
 
-        with open(config_file, 'w') as f:
+        with open(config_file, "w") as f:
             f.write(config_content)
 
-        print(f"✓ Device configuration written")
+        print("✓ Device configuration written")
         return config_file
 
-    def register_with_server(self, server_ip, stream_name, password=''):
+    def register_with_server(self, server_ip, stream_name, password=""):
         """
         Register device with MediaMTX server
 
@@ -520,12 +549,12 @@ TAILSCALE_AUTH_KEY={tailscale_auth_key or ''}
         url = f"http://{server_ip}:5000/device/register"
 
         payload = {
-            'stream_name': stream_name,
-            'device_id': self.device_id,
+            "stream_name": stream_name,
+            "device_id": self.device_id,
         }
 
         if password:
-            payload['password'] = password
+            payload["password"] = password
 
         print(f"📡 Registering with server at {server_ip}")
 
@@ -533,7 +562,7 @@ TAILSCALE_AUTH_KEY={tailscale_auth_key or ''}
             response = requests.post(url, json=payload, timeout=10)
 
             if response.status_code == 200:
-                print(f"✓ Registered with server")
+                print("✓ Registered with server")
                 return True
             else:
                 print(f"⚠ Server returned status {response.status_code}")

@@ -26,8 +26,8 @@ class ProvisioningManager:
     """Manages the complete provisioning process"""
 
     # Provisioned flags (priority: boot partition first)
-    PROVISIONED_FLAG = '/boot/firmware/provisioned'  # Primary (Pi 5, newer models)
-    PROVISIONED_FLAG_ALT = '/boot/provisioned'       # Legacy (older Pi models)
+    PROVISIONED_FLAG = "/boot/firmware/provisioned"  # Primary (Pi 5, newer models)
+    PROVISIONED_FLAG_ALT = "/boot/provisioned"  # Legacy (older Pi models)
 
     def __init__(self):
         self.device_identity = DeviceIdentity()
@@ -36,8 +36,9 @@ class ProvisioningManager:
 
     def is_provisioned(self):
         """Check if device has already been provisioned"""
-        return (os.path.exists(self.PROVISIONED_FLAG) or
-                os.path.exists(self.PROVISIONED_FLAG_ALT))
+        return os.path.exists(self.PROVISIONED_FLAG) or os.path.exists(
+            self.PROVISIONED_FLAG_ALT
+        )
 
     def mark_provisioned(self):
         """Mark device as provisioned"""
@@ -46,8 +47,10 @@ class ProvisioningManager:
             try:
                 flag_dir = os.path.dirname(flag_path)
                 if os.path.exists(flag_dir):
-                    with open(flag_path, 'w') as f:
-                        f.write(f"Provisioned on {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    with open(flag_path, "w") as f:
+                        f.write(
+                            f"Provisioned on {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        )
                         f.write(f"Device ID: {self.device_identity.device_id}\n")
                     print(f"✓ Marked as provisioned: {flag_path}")
                     return True
@@ -72,7 +75,8 @@ class ProvisioningManager:
         """Check if WiFi is currently connected"""
         try:
             import subprocess
-            result = subprocess.run(['iwgetid'], capture_output=True, timeout=5)
+
+            result = subprocess.run(["iwgetid"], capture_output=True, timeout=5)
             return result.returncode == 0
         except Exception:
             return False
@@ -94,19 +98,20 @@ class ProvisioningManager:
         except Exception as e:
             print(f"\n✗ Unexpected error during provisioning: {e}")
             import traceback
+
             traceback.print_exc()
             self._set_status(STATUS_WIFI_FAILED)
             self._reset_provisioning_data()
 
     def _do_provisioning(self, data):
         """Execute the provisioning steps. Called by on_provisioning_complete."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("📦 PROVISIONING DATA RECEIVED")
-        print("="*60)
+        print("=" * 60)
         print(f"WiFi Network: {data.wifi_ssid}")
         print(f"Server IP: {data.server_ip}")
         print(f"Stream Name: {data.stream_name or self.device_identity.device_id}")
-        print("="*60)
+        print("=" * 60)
         print()
 
         # Step 1: Configure WiFi with retries
@@ -122,7 +127,7 @@ class ProvisioningManager:
                 self._set_status(STATUS_WIFI_CONNECTED)
                 break
             if attempt < max_wifi_attempts:
-                print(f"  Retrying in 10 seconds...")
+                print("  Retrying in 10 seconds...")
                 time.sleep(10)
 
         if not wifi_success:
@@ -137,7 +142,9 @@ class ProvisioningManager:
         stream_name = data.stream_name or self.device_identity.device_id
         if data.tailscale_auth_key and data.tailscale_auth_key.strip():
             print("\nStep 2/4: Joining Tailscale network...")
-            if not self.network_setup.configure_tailscale(data.tailscale_auth_key, stream_name):
+            if not self.network_setup.configure_tailscale(
+                data.tailscale_auth_key, stream_name
+            ):
                 print("✗ Tailscale configuration failed!")
                 print("   Please check auth key and try again via Bluetooth.")
                 # DON'T stop BLE - allow user to send new credentials
@@ -150,9 +157,7 @@ class ProvisioningManager:
         print("\nStep 3/4: Writing device configuration...")
         try:
             self.network_setup.write_device_config(
-                data.server_ip,
-                stream_name,
-                tailscale_auth_key=data.tailscale_auth_key
+                data.server_ip, stream_name, tailscale_auth_key=data.tailscale_auth_key
             )
         except Exception as e:
             print(f"✗ Failed to write config: {e}")
@@ -169,16 +174,16 @@ class ProvisioningManager:
         self.mark_provisioned()
         self._set_status(STATUS_SUCCESS)
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("✓ PROVISIONING COMPLETE!")
-        print("="*60)
+        print("=" * 60)
         print()
         print("The device will now:")
         print("  1. Disable Bluetooth provisioning")
         print("  2. Start the streaming service")
         print()
         print("You can view the stream in the CrowdCount app.")
-        print("="*60)
+        print("=" * 60)
         print()
 
         # Stop Bluetooth server (must run on GLib main loop thread)
@@ -187,12 +192,12 @@ class ProvisioningManager:
 
     def start_provisioning(self):
         """Start the provisioning process"""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("CROWDCOUNT DEVICE PROVISIONING")
-        print("="*60)
+        print("=" * 60)
         print(f"Device: {self.device_identity}")
         print(f"Model: {self.device_identity.model}")
-        print("="*60)
+        print("=" * 60)
         print()
 
         # Check if already provisioned
@@ -219,7 +224,9 @@ class ProvisioningManager:
             print()
 
             # Check if device config exists (relative to this script's location)
-            device_config = Path(__file__).parent.parent / "counter-stream" / "device-info.conf"
+            device_config = (
+                Path(__file__).parent.parent / "counter-stream" / "device-info.conf"
+            )
             if device_config.exists():
                 print("✓ Device configuration exists")
                 print("  Marking device as provisioned...")
@@ -244,14 +251,14 @@ class ProvisioningManager:
         print()
 
         self.bluetooth_server = BluetoothProvisioningServer(
-            self.device_identity,
-            self.on_provisioning_complete
+            self.device_identity, self.on_provisioning_complete
         )
 
         return self.bluetooth_server.start()
 
     def run(self):
         """Main entry point"""
+
         # Setup signal handlers
         def signal_handler(sig, frame):
             print("\n⚠ Provisioning interrupted")
@@ -270,11 +277,13 @@ def main():
     """Command-line entry point"""
     import argparse
 
-    parser = argparse.ArgumentParser(description='CrowdCount Device Provisioning')
-    parser.add_argument('--reset', action='store_true',
-                       help='Reset provisioning state')
-    parser.add_argument('--force', action='store_true',
-                       help='Force provisioning even if already provisioned')
+    parser = argparse.ArgumentParser(description="CrowdCount Device Provisioning")
+    parser.add_argument("--reset", action="store_true", help="Reset provisioning state")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force provisioning even if already provisioned",
+    )
     args = parser.parse_args()
 
     manager = ProvisioningManager()

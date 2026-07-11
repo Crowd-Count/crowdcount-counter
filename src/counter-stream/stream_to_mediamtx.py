@@ -16,6 +16,7 @@ import uuid
 
 try:
     from picamera2 import Picamera2
+
     PICAMERA2_AVAILABLE = True
 except ImportError:
     PICAMERA2_AVAILABLE = False
@@ -23,6 +24,7 @@ except ImportError:
 
 try:
     import cv2
+
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
@@ -31,6 +33,7 @@ except ImportError:
 try:
     import sys
     from pathlib import Path
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from video_config import VIDEO_FPS, VIDEO_WIDTH, VIDEO_HEIGHT
 except ImportError:
@@ -41,7 +44,20 @@ except ImportError:
 
 
 class RTSPCameraStreamer:
-    def __init__(self, server_ip, stream_name, width=VIDEO_WIDTH, height=VIDEO_HEIGHT, fps=VIDEO_FPS, rtsp_port=8554, orchestrator_port=5000, device_id=None, password=None, api_url=None, dev_mode=False):
+    def __init__(
+        self,
+        server_ip,
+        stream_name,
+        width=VIDEO_WIDTH,
+        height=VIDEO_HEIGHT,
+        fps=VIDEO_FPS,
+        rtsp_port=8554,
+        orchestrator_port=5000,
+        device_id=None,
+        password=None,
+        api_url=None,
+        dev_mode=False,
+    ):
         """
         Initialize the RTSP camera streamer
 
@@ -83,9 +99,13 @@ class RTSPCameraStreamer:
         self.shutdown_requested = False
         self.last_health_check = 0
         self.health_check_interval = 30  # seconds between health checks
-        self.initial_health_check_delay = 30  # seconds before first health check (give stream time to establish)
+        self.initial_health_check_delay = (
+            30  # seconds before first health check (give stream time to establish)
+        )
         self.consecutive_health_failures = 0
-        self.max_health_failures = 5  # failures before restart (5 failures * 30s = 2.5 min to restart)
+        self.max_health_failures = (
+            5  # failures before restart (5 failures * 30s = 2.5 min to restart)
+        )
         self.ip_refresh_interval = 30  # seconds between IP refresh attempts
         self.last_ip_refresh = 0
 
@@ -107,19 +127,24 @@ class RTSPCameraStreamer:
         if not self.password:
             return {}
         from urllib.parse import urlparse
-        signing_key = hashlib.sha256(f"{self.device_id}:{self.password}".encode()).digest()
+
+        signing_key = hashlib.sha256(
+            f"{self.device_id}:{self.password}".encode()
+        ).digest()
         path = urlparse(url).path
         timestamp = str(int(time.time()))
         nonce = str(uuid.uuid4())
         body_hash = hashlib.sha256(body.encode()).hexdigest()
         string_to_sign = f"{method}\n{path}\n{body_hash}\n{timestamp}\n{nonce}"
-        signature = hmac_mod.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        signature = hmac_mod.new(
+            signing_key, string_to_sign.encode(), hashlib.sha256
+        ).hexdigest()
         return {
-            'X-CC-Signature': signature,
-            'X-CC-Timestamp': timestamp,
-            'X-CC-Nonce': nonce,
-            'X-CC-Device-Id': self.device_id,
-            'X-CC-Sig-Version': '1',
+            "X-CC-Signature": signature,
+            "X-CC-Timestamp": timestamp,
+            "X-CC-Nonce": nonce,
+            "X-CC-Device-Id": self.device_id,
+            "X-CC-Sig-Version": "1",
         }
 
     def check_libcamera_cameras(self):
@@ -148,15 +173,20 @@ class RTSPCameraStreamer:
                     main={"size": (self.width, self.height)},
                     controls={
                         "FrameRate": self.fps,
-                        "FrameDurationLimits": (int(1000000 / self.fps), int(1000000 / self.fps))  # Enforce exact FPS
+                        "FrameDurationLimits": (
+                            int(1000000 / self.fps),
+                            int(1000000 / self.fps),
+                        ),  # Enforce exact FPS
                     },
-                    buffer_count=4  # Increased from 2 for better stability
+                    buffer_count=4,  # Increased from 2 for better stability
                 )
                 self.picam2.configure(config)
                 self.picam2.start()
                 time.sleep(1)  # Give camera time to stabilize
                 self.use_legacy_camera = False
-                print(f"✓ Modern camera (libcamera) initialized: {self.width}x{self.height}@{self.fps}fps")
+                print(
+                    f"✓ Modern camera (libcamera) initialized: {self.width}x{self.height}@{self.fps}fps"
+                )
                 print("  Using hardware H.264 encoder (VideoCore IV GPU)")
                 return True
             except Exception as e:
@@ -170,14 +200,49 @@ class RTSPCameraStreamer:
 
         # If libcamera failed or no cameras detected, try legacy camera
         if not CV2_AVAILABLE:
-            print("No libcamera cameras found and OpenCV not installed, cannot use legacy camera")
+            print(
+                "No libcamera cameras found and OpenCV not installed, cannot use legacy camera"
+            )
             print("✗ Error: Could not open any video device")
             return False
 
         print("No libcamera cameras found, trying legacy camera (OpenCV)...")
 
         # Try different video device indices (Pi 5 uses higher numbers)
-        video_devices = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+        video_devices = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+        ]
 
         for device_id in video_devices:
             try:
@@ -192,7 +257,9 @@ class RTSPCameraStreamer:
                         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
                         self.use_legacy_camera = True
-                        print(f"✓ Legacy camera initialized on /dev/video{device_id}: {self.width}x{self.height}@{self.fps}fps")
+                        print(
+                            f"✓ Legacy camera initialized on /dev/video{device_id}: {self.width}x{self.height}@{self.fps}fps"
+                        )
                         return True
                     else:
                         self.cap.release()
@@ -201,7 +268,7 @@ class RTSPCameraStreamer:
                     if self.cap:
                         self.cap.release()
                         self.cap = None
-            except Exception as e:
+            except Exception:
                 if self.cap:
                     self.cap.release()
                     self.cap = None
@@ -215,6 +282,7 @@ class RTSPCameraStreamer:
         try:
             # Test RTSP port connectivity before starting FFmpeg
             import socket
+
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(5)
@@ -223,7 +291,9 @@ class RTSPCameraStreamer:
                 if result == 0:
                     print(f"✓ RTSP port {self.rtsp_port} reachable on {self.server_ip}")
                 else:
-                    print(f"⚠ WARNING: RTSP port {self.rtsp_port} not reachable on {self.server_ip} (error {result})")
+                    print(
+                        f"⚠ WARNING: RTSP port {self.rtsp_port} not reachable on {self.server_ip} (error {result})"
+                    )
                     print("  FFmpeg may fail to connect. Check if MediaMTX is running.")
             except Exception as e:
                 print(f"⚠ Could not test RTSP connectivity: {e}")
@@ -231,53 +301,79 @@ class RTSPCameraStreamer:
             if self.use_legacy_camera:
                 # Legacy camera: Use MJPEG encoding (software, but lightweight)
                 ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-f', 'rawvideo',
-                    '-vcodec', 'rawvideo',
-                    '-pix_fmt', 'bgr24',
-                    '-s', f'{self.width}x{self.height}',
-                    '-r', str(self.fps),
-                    '-i', '-',
-                    '-c:v', 'mjpeg',
-                    '-pix_fmt', 'yuvj422p',
-                    '-q:v', '5',
-                    '-fflags', '+genpts',     # Generate PTS (changed from nobuffer for consistency)
-                    '-flags', 'low_delay',
-                    '-f', 'rtsp',
-                    '-rtsp_transport', 'tcp',
-                    self.publish_url
+                    "ffmpeg",
+                    "-f",
+                    "rawvideo",
+                    "-vcodec",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "bgr24",
+                    "-s",
+                    f"{self.width}x{self.height}",
+                    "-r",
+                    str(self.fps),
+                    "-i",
+                    "-",
+                    "-c:v",
+                    "mjpeg",
+                    "-pix_fmt",
+                    "yuvj422p",
+                    "-q:v",
+                    "5",
+                    "-fflags",
+                    "+genpts",  # Generate PTS (changed from nobuffer for consistency)
+                    "-flags",
+                    "low_delay",
+                    "-f",
+                    "rtsp",
+                    "-rtsp_transport",
+                    "tcp",
+                    self.publish_url,
                 ]
                 print("Using MJPEG encoding over RTSP (legacy camera)")
             else:
                 # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
                 # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
-                bitrate = 1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
+                bitrate = (
+                    1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
+                )
                 ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-loglevel', 'verbose',  # More detailed logging for debugging
+                    "ffmpeg",
+                    "-loglevel",
+                    "verbose",  # More detailed logging for debugging
                     # Input options (must come before -i)
-                    '-fflags', '+genpts',  # Generate PTS (input needs timestamps)
-                    '-analyzeduration', '500000',  # 0.5s analysis (faster startup)
-                    '-probesize', '500000',  # 500KB probe (faster startup)
-                    '-f', 'h264',  # Input is H.264 elementary stream
-                    '-r', str(self.fps),  # Input framerate hint
-                    '-i', '-',  # Read from stdin
+                    "-fflags",
+                    "+genpts",  # Generate PTS (input needs timestamps)
+                    "-analyzeduration",
+                    "500000",  # 0.5s analysis (faster startup)
+                    "-probesize",
+                    "500000",  # 500KB probe (faster startup)
+                    "-f",
+                    "h264",  # Input is H.264 elementary stream
+                    "-r",
+                    str(self.fps),  # Input framerate hint
+                    "-i",
+                    "-",  # Read from stdin
                     # Output options
-                    '-c:v', 'copy',  # NO re-encoding! Just copy the H.264 stream
-                    '-flags', 'low_delay',  # Low delay mode
-                    '-f', 'rtsp',  # RTSP format
-                    '-rtsp_transport', 'tcp',  # Use TCP for reliability over Tailscale
-                    self.publish_url
+                    "-c:v",
+                    "copy",  # NO re-encoding! Just copy the H.264 stream
+                    "-flags",
+                    "low_delay",  # Low delay mode
+                    "-f",
+                    "rtsp",  # RTSP format
+                    "-rtsp_transport",
+                    "tcp",  # Use TCP for reliability over Tailscale
+                    self.publish_url,
                 ]
                 # Removed: duplicate -r output, -vsync cfr (caused frame drops), nobuffer (caused jitter issues)
-                print(f"Using hardware H.264 encoding ({bitrate/1000000:.1f} Mbps)")
+                print(f"Using hardware H.264 encoding ({bitrate / 1000000:.1f} Mbps)")
                 print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
             # Print URL and command for debugging
             display_url = f"rtsp://{self.server_ip}:{self.rtsp_port}/{self.stream_name}"
             print(f"Publishing stream to: {display_url}")
             # Print the full FFmpeg command (hide passwords if any)
-            cmd_str = ' '.join(ffmpeg_cmd).replace(self.publish_url, display_url)
+            cmd_str = " ".join(ffmpeg_cmd).replace(self.publish_url, display_url)
             print(f"FFmpeg command: {cmd_str}")
 
             # Start ffmpeg process
@@ -288,7 +384,7 @@ class RTSPCameraStreamer:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=5 * 1024 * 1024  # 5MB buffer
+                bufsize=5 * 1024 * 1024,  # 5MB buffer
             )
 
             print("✓ FFmpeg process started")
@@ -296,7 +392,9 @@ class RTSPCameraStreamer:
             # Start stderr monitoring thread to detect connection failures early
             self.ffmpeg_connection_lost = False
             self.ffmpeg_last_error = None
-            self.ffmpeg_stderr_thread = threading.Thread(target=self._monitor_ffmpeg_stderr, daemon=True)
+            self.ffmpeg_stderr_thread = threading.Thread(
+                target=self._monitor_ffmpeg_stderr, daemon=True
+            )
             self.ffmpeg_stderr_thread.start()
 
             return True
@@ -312,22 +410,22 @@ class RTSPCameraStreamer:
         (e.g., TCP connection reset, timeouts, broken pipe).
         """
         connection_error_patterns = [
-            b'Connection refused',
-            b'Connection reset',
-            b'Connection timed out',
-            b'Broken pipe',
-            b'No route to host',
-            b'Network is unreachable',
-            b'Connection closed',
-            b'Error writing trailer',
-            b'av_interleaved_write_frame',
-            b'muxing overhead',  # Often appears before connection loss
-            b'Socket',              # Socket errors
-            b'Timeout',             # Uppercase timeout
-            b'EAGAIN',              # Socket would block
-            b'ECONNRESET',          # Connection reset by peer
-            b'End of file',         # End of stream (more specific than EOF)
-            b'failed to connect',   # Connection failure (more specific)
+            b"Connection refused",
+            b"Connection reset",
+            b"Connection timed out",
+            b"Broken pipe",
+            b"No route to host",
+            b"Network is unreachable",
+            b"Connection closed",
+            b"Error writing trailer",
+            b"av_interleaved_write_frame",
+            b"muxing overhead",  # Often appears before connection loss
+            b"Socket",  # Socket errors
+            b"Timeout",  # Uppercase timeout
+            b"EAGAIN",  # Socket would block
+            b"ECONNRESET",  # Connection reset by peer
+            b"End of file",  # End of stream (more specific than EOF)
+            b"failed to connect",  # Connection failure (more specific)
         ]
 
         # Print first 50 lines of FFmpeg output for debugging
@@ -335,7 +433,11 @@ class RTSPCameraStreamer:
         max_debug_lines = 50
 
         try:
-            while self.ffmpeg_process and self.ffmpeg_process.poll() is None and self.running:
+            while (
+                self.ffmpeg_process
+                and self.ffmpeg_process.poll() is None
+                and self.running
+            ):
                 # Read stderr line by line (non-blocking would be better but this is simpler)
                 line = self.ffmpeg_process.stderr.readline()
                 if not line:
@@ -343,7 +445,7 @@ class RTSPCameraStreamer:
 
                 # Print initial FFmpeg output to help debug connection issues
                 if lines_printed < max_debug_lines:
-                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    line_str = line.decode("utf-8", errors="ignore").strip()
                     if line_str:  # Skip empty lines
                         print(f"[FFmpeg] {line_str}")
                         lines_printed += 1
@@ -351,12 +453,16 @@ class RTSPCameraStreamer:
                 # Check for connection error patterns
                 for pattern in connection_error_patterns:
                     if pattern in line:
-                        self.ffmpeg_last_error = line.decode('utf-8', errors='ignore').strip()
+                        self.ffmpeg_last_error = line.decode(
+                            "utf-8", errors="ignore"
+                        ).strip()
                         self.ffmpeg_connection_lost = True
-                        print(f"⚠ FFmpeg connection error detected: {self.ffmpeg_last_error}")
+                        print(
+                            f"⚠ FFmpeg connection error detected: {self.ffmpeg_last_error}"
+                        )
                         return
 
-        except Exception as e:
+        except Exception:
             # Thread cleanup on error
             pass
 
@@ -366,9 +472,13 @@ class RTSPCameraStreamer:
         # Initialize health check timer - delay first check to give stream time to establish
         # By setting last_health_check to (start_time - interval + initial_delay),
         # the first check happens after initial_health_check_delay seconds
-        self.last_health_check = start_time + self.initial_health_check_delay - self.health_check_interval
+        self.last_health_check = (
+            start_time + self.initial_health_check_delay - self.health_check_interval
+        )
         self.consecutive_health_failures = 0  # Reset failures on new stream
-        self.stream_start_time = start_time  # Track when stream started for API check grace period
+        self.stream_start_time = (
+            start_time  # Track when stream started for API check grace period
+        )
         self.stream_was_healthy = False  # Track if stream was ever confirmed healthy
 
         try:
@@ -394,7 +504,7 @@ class RTSPCameraStreamer:
 
                 # Start the encoder - this handles everything automatically!
                 self.picam2.start_encoder(encoder, output)
-                print(f"✓ Hardware encoder started ({bitrate/1000000:.1f} Mbps)")
+                print(f"✓ Hardware encoder started ({bitrate / 1000000:.1f} Mbps)")
 
                 # Monitor the stream (encoder runs in background)
                 last_status_time = time.time()
@@ -402,7 +512,9 @@ class RTSPCameraStreamer:
                     # Check if FFmpeg is still alive
                     if self.ffmpeg_process.poll() is not None:
                         print("✗ FFmpeg process died")
-                        stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
+                        stderr = self.ffmpeg_process.stderr.read().decode(
+                            "utf-8", errors="ignore"
+                        )
                         if stderr:
                             print("FFmpeg error output:")
                             print(stderr[-1000:])
@@ -416,35 +528,56 @@ class RTSPCameraStreamer:
                     current_time = time.time()
 
                     # Periodic comprehensive health checks
-                    if current_time - self.last_health_check >= self.health_check_interval:
-                        all_passed, results, critical_failures = self.perform_health_checks()
+                    if (
+                        current_time - self.last_health_check
+                        >= self.health_check_interval
+                    ):
+                        all_passed, results, critical_failures = (
+                            self.perform_health_checks()
+                        )
 
                         if not all_passed:
                             self.consecutive_health_failures += 1
-                            print(f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})")
+                            print(
+                                f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})"
+                            )
                             for failure in critical_failures:
                                 print(f"  ✗ {failure}")
 
                             # If API reports device offline AND stream was previously working,
                             # immediately restart. If stream was never healthy, let the normal
                             # failure count handle it (immediate restart would just loop).
-                            if any("API reports device offline" in f for f in critical_failures):
+                            if any(
+                                "API reports device offline" in f
+                                for f in critical_failures
+                            ):
                                 if self.stream_was_healthy:
-                                    print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                    print(
+                                        "\n✗ Server reports device offline - immediately restarting pipeline..."
+                                    )
                                     break
                                 else:
-                                    print(f"  (stream was never healthy - waiting for normal failure threshold)")
+                                    print(
+                                        "  (stream was never healthy - waiting for normal failure threshold)"
+                                    )
 
                             # If too many consecutive failures, break and restart
-                            if self.consecutive_health_failures >= self.max_health_failures:
-                                print(f"\n✗ Too many consecutive health failures - restarting stream...")
+                            if (
+                                self.consecutive_health_failures
+                                >= self.max_health_failures
+                            ):
+                                print(
+                                    "\n✗ Too many consecutive health failures - restarting stream..."
+                                )
                                 break
                         else:
                             if not self.stream_was_healthy:
-                                print(f"\n✓ Stream confirmed healthy")
+                                print("\n✓ Stream confirmed healthy")
                                 self.stream_was_healthy = True
                             if self.consecutive_health_failures > 0:
-                                print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
+                                print(
+                                    f"\n✓ Health check recovered after {self.consecutive_health_failures} failures"
+                                )
                                 for name, (ok, msg) in results.items():
                                     print(f"  ✓ {name}: {msg}")
                             self.consecutive_health_failures = 0
@@ -454,7 +587,9 @@ class RTSPCameraStreamer:
                     # Print status every 10 seconds (less spam)
                     if current_time - last_status_time >= 10:
                         elapsed = current_time - start_time
-                        print(f"Streaming: {elapsed:.1f}s elapsed, encoder running at {self.fps} fps")
+                        print(
+                            f"Streaming: {elapsed:.1f}s elapsed, encoder running at {self.fps} fps"
+                        )
                         last_status_time = current_time
 
                     time.sleep(1)
@@ -488,45 +623,73 @@ class RTSPCameraStreamer:
                         if frame_count % (self.fps * 10) == 0:
                             elapsed = time.time() - start_time
                             actual_fps = frame_count / elapsed if elapsed > 0 else 0
-                            print(f"Streaming: {frame_count} frames | {actual_fps:.1f} fps")
+                            print(
+                                f"Streaming: {frame_count} frames | {actual_fps:.1f} fps"
+                            )
 
                         # Periodic health checks
-                        if frame_count - last_health_check_frame >= frames_per_health_check:
-                            all_passed, results, critical_failures = self.perform_health_checks()
+                        if (
+                            frame_count - last_health_check_frame
+                            >= frames_per_health_check
+                        ):
+                            all_passed, results, critical_failures = (
+                                self.perform_health_checks()
+                            )
 
                             if not all_passed:
                                 self.consecutive_health_failures += 1
-                                print(f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})")
+                                print(
+                                    f"\n⚠ Health check FAILED ({self.consecutive_health_failures}/{self.max_health_failures})"
+                                )
                                 for failure in critical_failures:
                                     print(f"  ✗ {failure}")
 
                                 # If API reports device offline AND stream was previously working,
                                 # immediately restart. If stream was never healthy, let the normal
                                 # failure count handle it (immediate restart would just loop).
-                                if any("API reports device offline" in f for f in critical_failures):
+                                if any(
+                                    "API reports device offline" in f
+                                    for f in critical_failures
+                                ):
                                     if self.stream_was_healthy:
-                                        print(f"\n✗ Server reports device offline - immediately restarting pipeline...")
+                                        print(
+                                            "\n✗ Server reports device offline - immediately restarting pipeline..."
+                                        )
                                         break
                                     else:
-                                        print(f"  (stream was never healthy - waiting for normal failure threshold)")
+                                        print(
+                                            "  (stream was never healthy - waiting for normal failure threshold)"
+                                        )
 
-                                if self.consecutive_health_failures >= self.max_health_failures:
-                                    print(f"\n✗ Too many consecutive health failures - restarting stream...")
+                                if (
+                                    self.consecutive_health_failures
+                                    >= self.max_health_failures
+                                ):
+                                    print(
+                                        "\n✗ Too many consecutive health failures - restarting stream..."
+                                    )
                                     break
                             else:
                                 if not self.stream_was_healthy:
-                                    print(f"\n✓ Stream confirmed healthy")
+                                    print("\n✓ Stream confirmed healthy")
                                     self.stream_was_healthy = True
                                 if self.consecutive_health_failures > 0:
-                                    print(f"\n✓ Health check recovered after {self.consecutive_health_failures} failures")
+                                    print(
+                                        f"\n✓ Health check recovered after {self.consecutive_health_failures} failures"
+                                    )
                                 self.consecutive_health_failures = 0
 
                             last_health_check_frame = frame_count
 
                     except BrokenPipeError:
                         print("✗ FFmpeg pipe broken - stream may have disconnected")
-                        if self.ffmpeg_process and self.ffmpeg_process.poll() is not None:
-                            stderr = self.ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
+                        if (
+                            self.ffmpeg_process
+                            and self.ffmpeg_process.poll() is not None
+                        ):
+                            stderr = self.ffmpeg_process.stderr.read().decode(
+                                "utf-8", errors="ignore"
+                            )
                             if stderr:
                                 print("FFmpeg error output:")
                                 print(stderr[-1000:])
@@ -548,18 +711,19 @@ class RTSPCameraStreamer:
         try:
             # Check Tailscale status
             result = subprocess.run(
-                ['tailscale', 'status', '--json'],
+                ["tailscale", "status", "--json"],
                 capture_output=True,
                 timeout=5,
-                text=True
+                text=True,
             )
             if result.returncode != 0:
                 return False, "Tailscale not running"
 
             import json
+
             status = json.loads(result.stdout)
-            backend_state = status.get('BackendState', '')
-            if backend_state != 'Running':
+            backend_state = status.get("BackendState", "")
+            if backend_state != "Running":
                 return False, f"Tailscale state: {backend_state}"
 
             return True, "Tailscale connected"
@@ -572,6 +736,7 @@ class RTSPCameraStreamer:
         This prevents FFmpeg from hanging on connection attempts.
         """
         import socket
+
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3)  # 3 second timeout
@@ -580,7 +745,10 @@ class RTSPCameraStreamer:
             if result == 0:
                 return True, f"Server {self.server_ip}:{self.rtsp_port} reachable"
             else:
-                return False, f"Server {self.server_ip}:{self.rtsp_port} not reachable (error {result})"
+                return (
+                    False,
+                    f"Server {self.server_ip}:{self.rtsp_port} not reachable (error {result})",
+                )
         except socket.timeout:
             return False, f"Server {self.server_ip}:{self.rtsp_port} connection timeout"
         except Exception as e:
@@ -597,33 +765,47 @@ class RTSPCameraStreamer:
             # MediaMTX API endpoint (no authentication - secured by Tailscale)
             api_url = f"http://{self.server_ip}:{self.mediamtx_api_port}/v3/paths/list"
 
-            response = requests.get(api_url, timeout=10)  # Increased timeout for stability
+            response = requests.get(
+                api_url, timeout=10
+            )  # Increased timeout for stability
 
             if response.status_code == 200:
                 data = response.json()
-                items = data.get('items') or []
+                items = data.get("items") or []
 
                 # Look for our stream in the list
                 for item in items:
-                    if item.get('name') == self.stream_name:
+                    if item.get("name") == self.stream_name:
                         # Stream exists - consider it OK even if not fully "ready" yet
                         # The stream needs time to establish, and "ready" can be delayed
-                        ready = item.get('ready', False)
-                        source = item.get('source')
+                        ready = item.get("ready", False)
+                        source = item.get("source")
 
                         if ready:
-                            return True, f"Stream '{self.stream_name}' ready on MediaMTX"
+                            return (
+                                True,
+                                f"Stream '{self.stream_name}' ready on MediaMTX",
+                            )
                         elif source:
-                            return True, f"Stream '{self.stream_name}' publishing to MediaMTX"
+                            return (
+                                True,
+                                f"Stream '{self.stream_name}' publishing to MediaMTX",
+                            )
                         else:
                             # Stream exists but not ready yet - this is OK, give it time
-                            return True, f"Stream '{self.stream_name}' exists on MediaMTX (initializing)"
+                            return (
+                                True,
+                                f"Stream '{self.stream_name}' exists on MediaMTX (initializing)",
+                            )
 
                 # Stream not found at all - this is a real problem
                 return False, f"Stream '{self.stream_name}' not found on MediaMTX"
             else:
                 # API error - don't fail health check for API issues
-                return True, f"MediaMTX API returned {response.status_code} (skipping check)"
+                return (
+                    True,
+                    f"MediaMTX API returned {response.status_code} (skipping check)",
+                )
         except Exception as e:
             # Connection error to MediaMTX API - don't fail for this
             return True, f"MediaMTX API check skipped: {e}"
@@ -642,40 +824,53 @@ class RTSPCameraStreamer:
         # The orchestrator needs time to detect the stream (~15s health check interval)
         # and call update_status('online') on the API
         api_check_grace_period = 90  # seconds
-        if hasattr(self, 'stream_start_time') and (time.time() - self.stream_start_time) < api_check_grace_period:
+        if (
+            hasattr(self, "stream_start_time")
+            and (time.time() - self.stream_start_time) < api_check_grace_period
+        ):
             elapsed = time.time() - self.stream_start_time
-            print(f"[Health] Skipping API status check (grace period: {elapsed:.0f}s / {api_check_grace_period}s)")
-            return True, f"API check skipped (grace period: {elapsed:.0f}s / {api_check_grace_period}s)"
+            print(
+                f"[Health] Skipping API status check (grace period: {elapsed:.0f}s / {api_check_grace_period}s)"
+            )
+            return (
+                True,
+                f"API check skipped (grace period: {elapsed:.0f}s / {api_check_grace_period}s)",
+            )
 
         try:
             import requests
 
             # Check device status via /connection_status endpoint
             status_url = f"{self.api_url}/connection_status"
-            payload = {
-                'device_id': self.device_id
-            }
+            payload = {"device_id": self.device_id}
 
             import json
-            body_str = json.dumps(payload)
-            sig_headers = self._sign_request('POST', status_url, body_str)
 
-            print(f"[Health] Checking API device status: {status_url} (device_id={self.device_id})")
-            response = requests.post(status_url, json=payload, headers=sig_headers, timeout=5)
+            body_str = json.dumps(payload)
+            sig_headers = self._sign_request("POST", status_url, body_str)
+
+            print(
+                f"[Health] Checking API device status: {status_url} (device_id={self.device_id})"
+            )
+            response = requests.post(
+                status_url, json=payload, headers=sig_headers, timeout=5
+            )
 
             if response.status_code == 200:
                 data = response.json()
-                status = data.get('status', 'unknown')
+                status = data.get("status", "unknown")
                 print(f"[Health] API reports device status: {status}")
-                if status == 'offline':
+                if status == "offline":
                     return False, "API reports device offline"
                 return True, f"API status: {status}"
             elif response.status_code == 404:
                 # Device not found on server
-                print(f"[Health] API returned 404 - device not found")
+                print("[Health] API returned 404 - device not found")
                 return True, "Device not found on API (skipping check)"
             else:
-                print(f"[Health] API returned unexpected status code: {response.status_code}")
+                print(
+                    f"[Health] API returned unexpected status code: {response.status_code}"
+                )
                 return True, f"API returned {response.status_code}"
         except Exception as e:
             # API errors shouldn't break streaming - but log them so we can debug
@@ -705,7 +900,7 @@ class RTSPCameraStreamer:
 
         # Check 1: Quick TCP connection test (fast, detects server down immediately)
         ok, msg = self.check_server_reachable()
-        results['server_tcp'] = (ok, msg)
+        results["server_tcp"] = (ok, msg)
         if not ok:
             critical_failures.append(f"Server: {msg}")
             # If server is unreachable, skip MediaMTX API check (it will also fail)
@@ -714,14 +909,14 @@ class RTSPCameraStreamer:
         # Check 2: MediaMTX stream status (CRITICAL - this tells us if server is receiving)
         # This is the only check we really need - if MediaMTX sees our stream, everything is working
         ok, msg = self.check_mediamtx_stream_status()
-        results['mediamtx'] = (ok, msg)
+        results["mediamtx"] = (ok, msg)
         if not ok:
             critical_failures.append(f"MediaMTX: {msg}")
 
         # Check 3: API device status (CRITICAL - if server thinks we're offline, restart pipeline)
         # This catches cases where the orchestrator marked us offline but we think we're still streaming
         ok, msg = self.check_api_device_status()
-        results['api_status'] = (ok, msg)
+        results["api_status"] = (ok, msg)
         if not ok:
             critical_failures.append(f"API Status: {msg}")
 
@@ -746,21 +941,26 @@ class RTSPCameraStreamer:
             import requests
 
             api_endpoint = f"{self.api_url}/get_streaming_server_ip"
-            payload = {
-                'device_id': self.device_id,
-                'password': self.password
-            }
+            payload = {"device_id": self.device_id, "password": self.password}
 
             import json
-            body_str = json.dumps(payload)
-            sig_headers = self._sign_request('POST', api_endpoint, body_str)
 
-            print(f"Fetching streaming server IP from API...")
-            response = requests.post(api_endpoint, json=payload, headers=sig_headers, timeout=10)
+            body_str = json.dumps(payload)
+            sig_headers = self._sign_request("POST", api_endpoint, body_str)
+
+            print("Fetching streaming server IP from API...")
+            response = requests.post(
+                api_endpoint, json=payload, headers=sig_headers, timeout=10
+            )
 
             if response.status_code == 200:
                 data = response.json()
-                new_ip = data.get('server_ip') or data.get('ip') or data.get('streaming_ip') or data.get('streaming_server_ip')
+                new_ip = (
+                    data.get("server_ip")
+                    or data.get("ip")
+                    or data.get("streaming_ip")
+                    or data.get("streaming_server_ip")
+                )
                 if new_ip:
                     print(f"✓ Got streaming server IP from API: {new_ip}")
                     return new_ip
@@ -795,10 +995,10 @@ class RTSPCameraStreamer:
             payload = {
                 "stream_name": self.stream_name,
                 "device_id": self.device_id,
-                "password": self.password
+                "password": self.password,
             }
 
-            print(f"Registering device with server...")
+            print("Registering device with server...")
             response = requests.post(register_url, json=payload, timeout=5)
 
             if response.status_code == 200:
@@ -806,18 +1006,20 @@ class RTSPCameraStreamer:
                 return True
             elif response.status_code == 401:
                 try:
-                    msg = response.json().get('message', 'Invalid credentials')
+                    msg = response.json().get("message", "Invalid credentials")
                 except Exception:
-                    msg = 'Invalid credentials'
+                    msg = "Invalid credentials"
                 print(f"✗ Authentication failed: {msg}")
                 print(f"  Device ID: {self.device_id}")
-                print(f"  Check device-identity.conf has correct DEVICE_ID and API_PASSWORD")
+                print(
+                    "  Check device-identity.conf has correct DEVICE_ID and API_PASSWORD"
+                )
                 return False
             elif response.status_code == 400:
                 try:
-                    msg = response.json().get('message', 'Bad request')
+                    msg = response.json().get("message", "Bad request")
                 except Exception:
-                    msg = 'Bad request'
+                    msg = "Bad request"
                 print(f"✗ Registration error: {msg}")
                 return False
             else:
@@ -866,13 +1068,18 @@ class RTSPCameraStreamer:
                     if server_unreachable_since is None:
                         server_unreachable_since = time.time()
                     elif time.time() - server_unreachable_since > 120:
-                        print(f"✗ Server unreachable for over 2 minutes, exiting to allow recovery")
+                        print(
+                            "✗ Server unreachable for over 2 minutes, exiting to allow recovery"
+                        )
                         return False
                     print(f"✗ {msg}")
                     if self.reconnection_enabled and not self.shutdown_requested:
                         # Server unreachable - try to fetch new IP
                         current_time = time.time()
-                        if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                        if (
+                            current_time - self.last_ip_refresh
+                            >= self.ip_refresh_interval
+                        ):
                             new_ip = self.fetch_streaming_server_ip()
                             if new_ip:
                                 self.update_server_ip(new_ip)
@@ -921,7 +1128,10 @@ class RTSPCameraStreamer:
                     if self.reconnection_enabled and not self.shutdown_requested:
                         # FFmpeg failure might be due to server IP change - fetch new IP
                         current_time = time.time()
-                        if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
+                        if (
+                            current_time - self.last_ip_refresh
+                            >= self.ip_refresh_interval
+                        ):
                             new_ip = self.fetch_streaming_server_ip()
                             if new_ip:
                                 self.update_server_ip(new_ip)
@@ -950,7 +1160,9 @@ class RTSPCameraStreamer:
                 # Connection lost - cleanup and retry if enabled
                 self.cleanup()
                 if self.reconnection_enabled:
-                    print(f"\n⚠ Connection lost. Reconnecting in {self.reconnection_delay} seconds...")
+                    print(
+                        f"\n⚠ Connection lost. Reconnecting in {self.reconnection_delay} seconds..."
+                    )
 
                     # Try to fetch new server IP from API before reconnecting
                     current_time = time.time()
@@ -1017,6 +1229,7 @@ class RTSPCameraStreamer:
                     print("⚠ FFmpeg didn't die, trying os.kill...")
                     try:
                         import os
+
                         os.kill(pid, signal.SIGKILL)
                         time.sleep(0.5)
                         print("✓ FFmpeg force killed")
@@ -1027,6 +1240,7 @@ class RTSPCameraStreamer:
                 # Last resort
                 try:
                     import os
+
                     os.kill(pid, signal.SIGKILL)
                     print(f"✓ Force killed FFmpeg (PID {pid})")
                 except Exception:
@@ -1066,7 +1280,7 @@ class RTSPCameraStreamer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Stream Raspberry Pi camera to MediaMTX server via RTSP',
+        description="Stream Raspberry Pi camera to MediaMTX server via RTSP",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1078,31 +1292,66 @@ Examples:
 
   # Use custom RTSP port
   python3 stream_to_mediamtx.py 100.72.64.80 entrance --port 8555
-        """
+        """,
     )
 
-    parser.add_argument('server_ip',
-                       help='Tailscale IP address of MediaMTX server (e.g., 100.72.64.80)')
-    parser.add_argument('stream_name',
-                       help='Unique name for this camera stream (e.g., camera1, entrance, counter1)')
-    parser.add_argument('--width', type=int, default=VIDEO_WIDTH,
-                       help=f'Video width in pixels (default: {VIDEO_WIDTH})')
-    parser.add_argument('--height', type=int, default=VIDEO_HEIGHT,
-                       help=f'Video height in pixels (default: {VIDEO_HEIGHT})')
-    parser.add_argument('--fps', type=int, default=VIDEO_FPS,
-                       help=f'Frames per second (default: {VIDEO_FPS})')
-    parser.add_argument('--port', type=int, default=8554,
-                       help='RTSP port on MediaMTX server (default: 8554)')
-    parser.add_argument('--orchestrator-port', type=int, default=5000,
-                       help='Orchestrator API port (default: 5000, use 5001 for dev server)')
-    parser.add_argument('--device-id', type=str, default=None,
-                       help='Device identifier (defaults to stream_name if not provided)')
-    parser.add_argument('--password', type=str, default='',
-                       help='Optional password for authentication')
-    parser.add_argument('--api-url', type=str, default='https://api.crowdcount.tech',
-                       help='CrowdCount API URL for status updates (default: https://api.crowdcount.tech)')
-    parser.add_argument('--dev', action='store_true',
-                       help='Use development server ports (MediaMTX API 9998 instead of 9997)')
+    parser.add_argument(
+        "server_ip", help="Tailscale IP address of MediaMTX server (e.g., 100.72.64.80)"
+    )
+    parser.add_argument(
+        "stream_name",
+        help="Unique name for this camera stream (e.g., camera1, entrance, counter1)",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=VIDEO_WIDTH,
+        help=f"Video width in pixels (default: {VIDEO_WIDTH})",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=VIDEO_HEIGHT,
+        help=f"Video height in pixels (default: {VIDEO_HEIGHT})",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=VIDEO_FPS,
+        help=f"Frames per second (default: {VIDEO_FPS})",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8554,
+        help="RTSP port on MediaMTX server (default: 8554)",
+    )
+    parser.add_argument(
+        "--orchestrator-port",
+        type=int,
+        default=5000,
+        help="Orchestrator API port (default: 5000, use 5001 for dev server)",
+    )
+    parser.add_argument(
+        "--device-id",
+        type=str,
+        default=None,
+        help="Device identifier (defaults to stream_name if not provided)",
+    )
+    parser.add_argument(
+        "--password", type=str, default="", help="Optional password for authentication"
+    )
+    parser.add_argument(
+        "--api-url",
+        type=str,
+        default="https://api.crowdcount.tech",
+        help="CrowdCount API URL for status updates (default: https://api.crowdcount.tech)",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Use development server ports (MediaMTX API 9998 instead of 9997)",
+    )
 
     args = parser.parse_args()
 
@@ -1118,7 +1367,7 @@ Examples:
         device_id=args.device_id,
         password=args.password,
         api_url=args.api_url,
-        dev_mode=args.dev
+        dev_mode=args.dev,
     )
 
     try:

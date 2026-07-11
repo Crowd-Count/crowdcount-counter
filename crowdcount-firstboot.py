@@ -64,8 +64,9 @@ def set_hostname(hostname):
     # Restart NetworkManager so it re-sends the new hostname in DHCP requests.
     # Without this, the router sees the old master image hostname.
     try:
-        subprocess.run(["systemctl", "restart", "NetworkManager"],
-                        capture_output=True, timeout=10)
+        subprocess.run(
+            ["systemctl", "restart", "NetworkManager"], capture_output=True, timeout=10
+        )
         log.info("Restarted NetworkManager with new hostname")
     except Exception as e:
         log.warning("Could not restart NetworkManager: %s", e)
@@ -82,10 +83,13 @@ def reset_tailscale_identity():
     log.info("Resetting Tailscale identity (cloned image → new node)...")
     try:
         # Stop tailscaled so we can safely clear state
-        subprocess.run(["systemctl", "stop", "tailscaled"], capture_output=True, timeout=10)
+        subprocess.run(
+            ["systemctl", "stop", "tailscaled"], capture_output=True, timeout=10
+        )
 
         # Remove all Tailscale state — node keys, machine keys, cached certs
         import shutil
+
         ts_state = "/var/lib/tailscale"
         if os.path.isdir(ts_state):
             for entry in os.listdir(ts_state):
@@ -100,8 +104,12 @@ def reset_tailscale_identity():
             log.info("Cleared Tailscale state directory")
 
         # Restart tailscaled with fresh state
-        subprocess.run(["systemctl", "start", "tailscaled"], capture_output=True, timeout=10)
-        log.info("Tailscale identity reset complete — will re-authenticate in crowdcount-main")
+        subprocess.run(
+            ["systemctl", "start", "tailscaled"], capture_output=True, timeout=10
+        )
+        log.info(
+            "Tailscale identity reset complete — will re-authenticate in crowdcount-main"
+        )
 
     except FileNotFoundError:
         log.warning("tailscale/systemctl not found — skipping Tailscale reset")
@@ -120,6 +128,7 @@ def setup_root_ssh_keys():
     deploy_key = os.path.join(counter_ssh_dir, "crowdcount_deploy")
     if os.path.isfile(deploy_key):
         import shutil
+
         shutil.copy2(deploy_key, os.path.join(root_ssh_dir, "crowdcount_deploy"))
         os.chmod(os.path.join(root_ssh_dir, "crowdcount_deploy"), 0o600)
         log.info("Copied deploy key to root")
@@ -139,7 +148,9 @@ def setup_root_ssh_keys():
     try:
         result = subprocess.run(
             ["ssh-keyscan", "github.com"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.stdout:
             with open(known_hosts, "a") as f:
@@ -152,7 +163,7 @@ def setup_root_ssh_keys():
 
 def set_password(username, password):
     log.info("Setting password for user: %s", username)
-    proc = subprocess.run(
+    subprocess.run(
         ["chpasswd"],
         input=f"{username}:{password}\n",
         text=True,
@@ -163,7 +174,7 @@ def set_password(username, password):
 def create_marker():
     try:
         with open(MARKER_FILE, "w") as f:
-            f.write(f"First boot completed\n")
+            f.write("First boot completed\n")
         log.info("Marker created: %s", MARKER_FILE)
     except Exception as e:
         log.warning("Could not create marker file: %s", e)
