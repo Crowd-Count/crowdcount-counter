@@ -230,21 +230,80 @@ def ensure_git_safe_directory() -> None:
     )
 
 
+def refresh_github_known_hosts() -> None:
+    """Re-keyscan github.com into root's known_hosts.
+
+    Heals the fetch-dead-forever state where known_hosts EXISTS but its
+    github entry is stale (rotated key) or hashed (so the text check in
+    ensure_root_ssh_access can't see it) — observed wedging p9386 for
+    months with "Host key verification failed".
+    """
+    try:
+        result = subprocess.run(
+            ["ssh-keyscan", "-t", "rsa,ed25519", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            known_hosts = Path("/root/.ssh/known_hosts")
+            known_hosts.parent.mkdir(mode=0o700, exist_ok=True)
+            with open(known_hosts, "a") as f:
+                f.write(result.stdout)
+            known_hosts.chmod(0o600)
+            logger.info("Refreshed GitHub host keys in root known_hosts")
+    except Exception as exc:
+        logger.warning("Could not refresh GitHub host keys: %s", exc)
+
+
+def heal_repo_state() -> None:
+    """Clear wedged git state left by previous failed updates.
+
+    - A half-finished merge (MERGE_HEAD present) blocks every future pull
+      until aborted; nothing else ever aborts it.
+    - Mode-bit changes (install scripts chmod +x tracked files) dirty the
+      tree forever on units where core.fileMode is true, making pulls
+      refuse with "local changes would be overwritten".
+    """
+    subprocess.run(
+        ["git", "config", "core.fileMode", "false"],
+        cwd=REPO_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if (REPO_DIR / ".git" / "MERGE_HEAD").exists():
+        logger.warning("Repo stuck in a merge from a previous run - aborting it")
+        subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+        )
+
+
 def check_and_update(device_id: str, password: str) -> None:
-    """Fetch origin/main, pull if changed, restart main service, report version."""
+    """Fetch origin/main, hard-reset onto it if changed, restart main service."""
     logger.info("Checking for updates...")
 
     ensure_git_safe_directory()
+    heal_repo_state()
 
-    # Fetch latest
-    try:
-        fetch = subprocess.run(
+    # Fetch latest (one retry after refreshing host keys — a stale
+    # known_hosts entry otherwise kills updates permanently)
+    def _fetch():
+        return subprocess.run(
             ["git", "fetch", "origin", "main"],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
             timeout=60,
         )
+
+    try:
+        fetch = _fetch()
+        if fetch.returncode != 0 and "Host key verification" in fetch.stderr:
+            refresh_github_known_hosts()
+            fetch = _fetch()
     except subprocess.TimeoutExpired:
         logger.warning("git fetch timed out")
         return
@@ -273,31 +332,27 @@ def check_and_update(device_id: str, password: str) -> None:
 
     logger.info("Update available: %s -> %s", local[:8], remote[:8])
 
-    # Discard local changes (e.g. chmod +x from install scripts) so pull doesn't fail
-    subprocess.run(
-        ["git", "checkout", "--", "."],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
-
-    # Pull
+    # Move EXACTLY onto the fetched commit. Unlike pull (fetch+merge),
+    # reset --hard cannot conflict and is idempotent from any local state —
+    # diverged history, dirty tree, whatever. It only touches TRACKED files:
+    # untracked device config (device-info.conf, identity files) is never
+    # affected. Never add `git clean` here for that same reason.
     try:
-        pull = subprocess.run(
-            ["git", "pull", "origin", "main"],
+        reset = subprocess.run(
+            ["git", "reset", "--hard", remote],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
             timeout=120,
         )
     except subprocess.TimeoutExpired:
-        logger.warning("git pull timed out")
+        logger.warning("git reset timed out")
         return
-    if pull.returncode != 0:
-        logger.error("git pull failed: %s", pull.stderr.strip())
+    if reset.returncode != 0:
+        logger.error("git reset failed: %s", reset.stderr.strip())
         return
 
-    logger.info("Pull complete")
+    logger.info("Update complete")
 
     # Restart main service
     restart = subprocess.run(
