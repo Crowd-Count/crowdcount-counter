@@ -29,6 +29,18 @@ try:
 except ImportError:
     CV2_AVAILABLE = False
 
+# Upstream session client (SRT dual-mode). Optional like picamera2/cv2: if the
+# module is missing or broken the device simply can never enter SRT mode and
+# the legacy RTSP path is untouched.
+try:
+    from upstream_session import UpstreamError, UpstreamSessionClient
+
+    UPSTREAM_CLIENT_AVAILABLE = True
+except ImportError:
+    UPSTREAM_CLIENT_AVAILABLE = False
+    UpstreamSessionClient = None
+    UpstreamError = Exception  # keeps except-clauses valid; path never taken
+
 # Import video config - try relative import first, then absolute
 try:
     import sys
@@ -57,6 +69,8 @@ class RTSPCameraStreamer:
         password=None,
         api_url=None,
         dev_mode=False,
+        upstream_api_url=None,
+        upstream_token=None,
     ):
         """
         Initialize the RTSP camera streamer
@@ -122,6 +136,33 @@ class RTSPCameraStreamer:
         else:
             self.mediamtx_api_port = 9997  # Prod server (default)
 
+        # ── Upstream SRT dual-mode state ──────────────────────────────────
+        # streaming_mode is a per-device flag on the CrowdCount API
+        # (/get_streaming_mode, values "rtsp"|"srt"): the blast-radius control
+        # for the Upstream cutover. SRT additionally requires a per-device
+        # Upstream token; without one this device behaves exactly as before.
+        self.upstream_api_url = upstream_api_url
+        self.upstream_token = upstream_token
+        self.upstream = None  # active UpstreamSessionClient (SRT runs only)
+        self.requested_mode = None  # last flag value fetched from the API
+        self.active_mode = "rtsp"  # transport of the CURRENT pipeline run
+        self.flag_poll_interval = 300  # seconds between streaming_mode polls
+        self.last_flag_poll = 0.0
+        # After any SRT failure fall back to RTSP and don't re-attempt SRT
+        # until this cooldown passes — prevents a broken SRT path from
+        # flapping the pipeline while still converging back to SRT on its own.
+        self.srt_retry_cooldown = 600
+        self.last_srt_failure = 0.0
+        # Set when the legacy (OpenCV/MJPEG) camera path is in use: MJPEG has
+        # no standard MPEG-TS payload, so SRT is impossible on that path.
+        self.legacy_forced_rtsp = False
+        # Set by the monitor loop when it breaks the pipeline purely to switch
+        # transports (a flag flip), so the restart isn't treated as a failure.
+        self.mode_switch_requested = False
+        # Set when an SRT session approaches its fixed TTL: the pipeline
+        # restarts onto a freshly minted session (planned, not a failure).
+        self.srt_rollover = False
+
     def _sign_request(self, method, url, body):
         """Compute HMAC-SHA256 signature headers for API requests."""
         if not self.password:
@@ -146,6 +187,79 @@ class RTSPCameraStreamer:
             "X-CC-Device-Id": self.device_id,
             "X-CC-Sig-Version": "1",
         }
+
+    def fetch_streaming_mode(self):
+        """Fetch this device's streaming_mode flag from the CrowdCount API.
+
+        Returns "rtsp"/"srt", or None on any error (caller keeps its last
+        known value — the flag living on the CrowdCount API is deliberate,
+        so it stays reachable when the Upstream side is what's failing).
+        """
+        try:
+            import json
+
+            import requests
+
+            url = f"{self.api_url}/get_streaming_mode"
+            payload = {"device_id": self.device_id, "password": self.password}
+            body_str = json.dumps(payload)
+            sig_headers = self._sign_request("POST", url, body_str)
+            response = requests.post(url, json=payload, headers=sig_headers, timeout=10)
+            if response.status_code == 200:
+                mode = response.json().get("streaming_mode")
+                if mode in ("rtsp", "srt"):
+                    return mode
+                print(f"⚠ Unexpected streaming_mode from API: {mode!r}")
+            else:
+                print(f"⚠ streaming_mode fetch returned HTTP {response.status_code}")
+        except Exception as e:
+            print(f"⚠ streaming_mode fetch failed: {e}")
+        return None
+
+    def resolve_streaming_mode(self):
+        """Decide which transport the NEXT pipeline run should use.
+
+        SRT requires: an Upstream token + client, the API flag set to "srt",
+        a modern (H.264 hardware) camera path, and no recent SRT failure.
+        Anything else resolves to the legacy RTSP path.
+        """
+        if not self.upstream_token or not self.upstream_api_url:
+            return "rtsp"
+        if not UPSTREAM_CLIENT_AVAILABLE:
+            return "rtsp"
+        if self.legacy_forced_rtsp or self.use_legacy_camera:
+            return "rtsp"
+
+        now = time.time()
+        if self.requested_mode is None or (
+            now - self.last_flag_poll >= self.flag_poll_interval
+        ):
+            mode = self.fetch_streaming_mode()
+            self.last_flag_poll = now
+            if mode is not None:
+                self.requested_mode = mode
+
+        if self.requested_mode != "srt":
+            return "rtsp"
+        if now - self.last_srt_failure < self.srt_retry_cooldown:
+            remaining = self.srt_retry_cooldown - (now - self.last_srt_failure)
+            print(f"SRT in fallback cooldown ({remaining:.0f}s left) - using RTSP")
+            return "rtsp"
+        return "srt"
+
+    def _record_srt_failure(self, reason):
+        """Note an SRT failure: tear down the session and arm the RTSP fallback."""
+        print(f"✗ SRT failure: {reason}")
+        print(
+            f"  Falling back to RTSP; will re-attempt SRT after {self.srt_retry_cooldown}s"
+        )
+        self.last_srt_failure = time.time()
+        if self.upstream:
+            try:
+                self.upstream.stop()
+            except Exception:
+                pass
+            self.upstream = None
 
     def check_libcamera_cameras(self):
         """Check if any cameras are available with libcamera"""
@@ -278,25 +392,40 @@ class RTSPCameraStreamer:
         return False
 
     def setup_ffmpeg(self):
-        """Setup ffmpeg process to stream via RTSP"""
+        """Setup ffmpeg process to stream via RTSP (legacy) or SRT (Upstream)"""
         try:
-            # Test RTSP port connectivity before starting FFmpeg
-            import socket
+            srt_mode = self.active_mode == "srt"
 
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                result = sock.connect_ex((self.server_ip, self.rtsp_port))
-                sock.close()
-                if result == 0:
-                    print(f"✓ RTSP port {self.rtsp_port} reachable on {self.server_ip}")
-                else:
-                    print(
-                        f"⚠ WARNING: RTSP port {self.rtsp_port} not reachable on {self.server_ip} (error {result})"
-                    )
-                    print("  FFmpeg may fail to connect. Check if MediaMTX is running.")
-            except Exception as e:
-                print(f"⚠ Could not test RTSP connectivity: {e}")
+            # Test RTSP port connectivity before starting FFmpeg (RTSP only —
+            # SRT is UDP to a different host; the session mint that just
+            # succeeded is the reachability check for that path)
+            if not srt_mode:
+                import socket
+
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)
+                    result = sock.connect_ex((self.server_ip, self.rtsp_port))
+                    sock.close()
+                    if result == 0:
+                        print(
+                            f"✓ RTSP port {self.rtsp_port} reachable on {self.server_ip}"
+                        )
+                    else:
+                        print(
+                            f"⚠ WARNING: RTSP port {self.rtsp_port} not reachable on {self.server_ip} (error {result})"
+                        )
+                        print(
+                            "  FFmpeg may fail to connect. Check if MediaMTX is running."
+                        )
+                except Exception as e:
+                    print(f"⚠ Could not test RTSP connectivity: {e}")
+
+            if srt_mode and self.use_legacy_camera:
+                # Guarded earlier (resolve_streaming_mode / start), but never
+                # let it slip through: MJPEG cannot ride MPEG-TS/SRT.
+                print("✗ Internal error: SRT mode with legacy camera - aborting setup")
+                return False
 
             if self.use_legacy_camera:
                 # Legacy camera: Use MJPEG encoding (software, but lightweight)
@@ -333,10 +462,26 @@ class RTSPCameraStreamer:
                 print("Using MJPEG encoding over RTSP (legacy camera)")
             else:
                 # Modern camera: Use hardware H.264 encoding (Picamera2 → FFmpeg copy)
-                # FFmpeg just wraps the pre-encoded H.264 stream in RTSP - no re-encoding!
+                # FFmpeg just wraps the pre-encoded H.264 stream - no re-encoding!
+                # RTSP (legacy) and SRT (Upstream) differ ONLY in output mux/URL:
+                # the video path and its CPU cost are identical.
                 bitrate = (
                     1200000  # 1.2 Mbps for 640p @ 15fps (optimized for Pi Zero 2 W)
                 )
+                if srt_mode:
+                    output_args = [
+                        "-f",
+                        "mpegts",  # SRT carries MPEG-TS
+                        self.upstream.srt_url,
+                    ]
+                else:
+                    output_args = [
+                        "-f",
+                        "rtsp",  # RTSP format
+                        "-rtsp_transport",
+                        "tcp",  # Use TCP for reliability over Tailscale
+                        self.publish_url,
+                    ]
                 ffmpeg_cmd = [
                     "ffmpeg",
                     "-loglevel",
@@ -359,21 +504,29 @@ class RTSPCameraStreamer:
                     "copy",  # NO re-encoding! Just copy the H.264 stream
                     "-flags",
                     "low_delay",  # Low delay mode
-                    "-f",
-                    "rtsp",  # RTSP format
-                    "-rtsp_transport",
-                    "tcp",  # Use TCP for reliability over Tailscale
-                    self.publish_url,
-                ]
+                ] + output_args
                 # Removed: duplicate -r output, -vsync cfr (caused frame drops), nobuffer (caused jitter issues)
                 print(f"Using hardware H.264 encoding ({bitrate / 1000000:.1f} Mbps)")
-                print("FFmpeg is just handling RTSP transport (no re-encoding)")
+                if srt_mode:
+                    print(
+                        "FFmpeg is just handling SRT/MPEG-TS transport (no re-encoding)"
+                    )
+                else:
+                    print("FFmpeg is just handling RTSP transport (no re-encoding)")
 
-            # Print URL and command for debugging
-            display_url = f"rtsp://{self.server_ip}:{self.rtsp_port}/{self.stream_name}"
+            # Print URL and command for debugging (never print the SRT URL —
+            # it carries the session passphrase)
+            if srt_mode:
+                display_url = self.upstream.redacted_srt_url
+                real_url = self.upstream.srt_url
+            else:
+                display_url = (
+                    f"rtsp://{self.server_ip}:{self.rtsp_port}/{self.stream_name}"
+                )
+                real_url = self.publish_url
             print(f"Publishing stream to: {display_url}")
-            # Print the full FFmpeg command (hide passwords if any)
-            cmd_str = " ".join(ffmpeg_cmd).replace(self.publish_url, display_url)
+            # Print the full FFmpeg command (hide credentials if any)
+            cmd_str = " ".join(ffmpeg_cmd).replace(real_url, display_url)
             print(f"FFmpeg command: {cmd_str}")
 
             # Start ffmpeg process
@@ -583,6 +736,26 @@ class RTSPCameraStreamer:
                             self.consecutive_health_failures = 0
 
                         self.last_health_check = current_time
+
+                        # Dual-mode maintenance (same cadence as health checks):
+                        # roll SRT sessions before their fixed TTL expires, and
+                        # converge to the flag's desired transport.
+                        if (
+                            self.active_mode == "srt"
+                            and self.upstream
+                            and self.upstream.needs_rollover
+                        ):
+                            print("\n→ Upstream session near expiry - rolling over...")
+                            self.srt_rollover = True
+                            break
+                        if self.upstream_token:
+                            desired = self.resolve_streaming_mode()
+                            if desired != self.active_mode:
+                                print(
+                                    f"\n→ streaming_mode is now '{desired}' - switching transport..."
+                                )
+                                self.mode_switch_requested = True
+                                break
 
                     # Print status every 10 seconds (less spam)
                     if current_time - last_status_time >= 10:
@@ -890,13 +1063,27 @@ class RTSPCameraStreamer:
     def perform_health_checks(self):
         """Perform comprehensive health checks to verify stream is actually working
 
-        Optimized for Pi Zero 2 W - quick TCP check + MediaMTX API check.
+        RTSP mode (legacy): quick TCP check + MediaMTX API check + CrowdCount
+        API status cross-check.
+
+        SRT mode: Upstream session state ONLY (plus ffmpeg liveness in the main
+        loop). The legacy checks are RTSP-path signals and MUST NOT run here:
+        an SRT device's stream is gone from the CrowdCount MediaMTX and the
+        counter-server legitimately reports it offline forever, so either
+        legacy check would restart-loop a perfectly healthy SRT pipeline.
 
         Returns:
             tuple: (all_passed: bool, results: dict, critical_failures: list)
         """
         results = {}
         critical_failures = []
+
+        if self.active_mode == "srt":
+            ok, msg = self.upstream.check()
+            results["upstream_session"] = (ok, msg)
+            if not ok:
+                critical_failures.append(f"Upstream session: {msg}")
+            return len(critical_failures) == 0, results, critical_failures
 
         # Check 1: Quick TCP connection test (fast, detects server down immediately)
         ok, msg = self.check_server_reachable()
@@ -1029,6 +1216,57 @@ class RTSPCameraStreamer:
             print(f"✗ Could not connect to server for registration: {e}")
             return False
 
+    def _start_srt_attempt(self):
+        """Set up camera + Upstream session + ffmpeg for one SRT run.
+
+        Returns True when ready to stream. On failure: cleans up and (except
+        for camera problems, which are transport-agnostic) arms the RTSP
+        fallback cooldown, then returns False so the reconnect loop retries —
+        resolving to RTSP while the cooldown is active.
+        """
+        # Camera first: the legacy (MJPEG) path can never ride SRT, and we
+        # must know which path we're on before minting a session.
+        if not self.setup_camera():
+            print("✗ Failed to initialize camera")
+            self.cleanup()
+            return False
+
+        if self.use_legacy_camera:
+            print("⚠ Legacy (MJPEG) camera path cannot stream SRT/MPEG-TS")
+            print("  Forcing RTSP mode for the lifetime of this process")
+            self.legacy_forced_rtsp = True
+            self.cleanup()
+            return False
+
+        try:
+            self.upstream = UpstreamSessionClient(
+                base_url=self.upstream_api_url,
+                token=self.upstream_token,
+                device_id=self.device_id,
+                width=self.width,
+                height=self.height,
+                fps=self.fps,
+                bitrate_kbps=1200,
+            )
+            self.upstream.start()
+        except UpstreamError as e:
+            self._record_srt_failure(f"session setup failed: {e}")
+            self.cleanup()
+            return False
+        except Exception as e:
+            self._record_srt_failure(f"unexpected session error: {e}")
+            self.cleanup()
+            return False
+
+        if not self.setup_ffmpeg():
+            self._record_srt_failure("ffmpeg setup failed")
+            self.cleanup()
+            return False
+
+        # Heartbeats + ingest confirmation start once ffmpeg is pushing
+        self.upstream.begin_keepalive()
+        return True
+
     def start(self):
         """Start the streaming process with automatic reconnection"""
         print("=" * 60)
@@ -1039,6 +1277,10 @@ class RTSPCameraStreamer:
         print(f"Device ID: {self.device_id}")
         print(f"RTSP URL: {self.rtsp_url}")
         print(f"Auto-reconnect: Enabled (every {self.reconnection_delay}s)")
+        if self.upstream_token and UPSTREAM_CLIENT_AVAILABLE:
+            print(f"Upstream SRT: available ({self.upstream_api_url})")
+        else:
+            print("Upstream SRT: not configured (legacy RTSP only)")
         print("=" * 60)
 
         # Setup signal handlers for graceful shutdown
@@ -1061,93 +1303,117 @@ class RTSPCameraStreamer:
                 print(f"{'=' * 60}")
 
             try:
-                # Check if server is reachable BEFORE doing anything else
-                # This fails fast instead of letting FFmpeg hang
-                reachable, msg = self.check_server_reachable()
-                if not reachable:
-                    if server_unreachable_since is None:
-                        server_unreachable_since = time.time()
-                    elif time.time() - server_unreachable_since > 120:
-                        print(
-                            "✗ Server unreachable for over 2 minutes, exiting to allow recovery"
-                        )
-                        return False
-                    print(f"✗ {msg}")
-                    if self.reconnection_enabled and not self.shutdown_requested:
-                        # Server unreachable - try to fetch new IP
-                        current_time = time.time()
-                        if (
-                            current_time - self.last_ip_refresh
-                            >= self.ip_refresh_interval
-                        ):
-                            new_ip = self.fetch_streaming_server_ip()
-                            if new_ip:
-                                self.update_server_ip(new_ip)
-                            self.last_ip_refresh = current_time
+                # Decide the transport for this attempt. RTSP is the answer
+                # unless the Upstream flag + token + camera path all line up.
+                self.active_mode = self.resolve_streaming_mode()
+                self.mode_switch_requested = False
+                self.srt_rollover = False
 
-                        print(f"Retrying in {self.reconnection_delay} seconds...")
-                        for _ in range(self.reconnection_delay):
-                            if self.shutdown_requested:
-                                break
-                            time.sleep(1)
-                        continue
-                    else:
-                        return False
-                server_unreachable_since = None
-                print(f"✓ {msg}")
+                if self.active_mode == "srt":
+                    print("Transport for this attempt: SRT (Upstream)")
+                    if not self._start_srt_attempt():
+                        # Failure recorded inside (cooldown makes the retry
+                        # resolve to RTSP; legacy camera forces RTSP outright)
+                        if self.reconnection_enabled and not self.shutdown_requested:
+                            print(f"Retrying in {self.reconnection_delay} seconds...")
+                            for _ in range(self.reconnection_delay):
+                                if self.shutdown_requested:
+                                    break
+                                time.sleep(1)
+                            continue
+                        else:
+                            return False
+                else:
+                    # ── Legacy RTSP path (unchanged behavior) ─────────────
+                    # Check if server is reachable BEFORE doing anything else
+                    # This fails fast instead of letting FFmpeg hang
+                    reachable, msg = self.check_server_reachable()
+                    if not reachable:
+                        if server_unreachable_since is None:
+                            server_unreachable_since = time.time()
+                        elif time.time() - server_unreachable_since > 120:
+                            print(
+                                "✗ Server unreachable for over 2 minutes, exiting to allow recovery"
+                            )
+                            return False
+                        print(f"✗ {msg}")
+                        if self.reconnection_enabled and not self.shutdown_requested:
+                            # Server unreachable - try to fetch new IP
+                            current_time = time.time()
+                            if (
+                                current_time - self.last_ip_refresh
+                                >= self.ip_refresh_interval
+                            ):
+                                new_ip = self.fetch_streaming_server_ip()
+                                if new_ip:
+                                    self.update_server_ip(new_ip)
+                                self.last_ip_refresh = current_time
 
-                # Register device with server (required - validates credentials)
-                if not self.register_device():
-                    if self.reconnection_enabled and not self.shutdown_requested:
-                        print(f"Retrying in {self.reconnection_delay} seconds...")
-                        for _ in range(self.reconnection_delay):
-                            if self.shutdown_requested:
-                                break
-                            time.sleep(1)
-                        continue
-                    else:
-                        return False
+                            print(f"Retrying in {self.reconnection_delay} seconds...")
+                            for _ in range(self.reconnection_delay):
+                                if self.shutdown_requested:
+                                    break
+                                time.sleep(1)
+                            continue
+                        else:
+                            return False
+                    server_unreachable_since = None
+                    print(f"✓ {msg}")
 
-                # Setup camera
-                if not self.setup_camera():
-                    print("✗ Failed to initialize camera")
-                    if self.reconnection_enabled and not self.shutdown_requested:
-                        print(f"Retrying in {self.reconnection_delay} seconds...")
-                        for _ in range(self.reconnection_delay):
-                            if self.shutdown_requested:
-                                break
-                            time.sleep(1)
-                        continue
-                    else:
-                        return False
+                    # Register device with server (required - validates credentials)
+                    if not self.register_device():
+                        if self.reconnection_enabled and not self.shutdown_requested:
+                            print(f"Retrying in {self.reconnection_delay} seconds...")
+                            for _ in range(self.reconnection_delay):
+                                if self.shutdown_requested:
+                                    break
+                                time.sleep(1)
+                            continue
+                        else:
+                            return False
 
-                # Setup FFmpeg
-                if not self.setup_ffmpeg():
-                    print("✗ Failed to initialize ffmpeg")
-                    self.cleanup()
-                    if self.reconnection_enabled and not self.shutdown_requested:
-                        # FFmpeg failure might be due to server IP change - fetch new IP
-                        current_time = time.time()
-                        if (
-                            current_time - self.last_ip_refresh
-                            >= self.ip_refresh_interval
-                        ):
-                            new_ip = self.fetch_streaming_server_ip()
-                            if new_ip:
-                                self.update_server_ip(new_ip)
-                            self.last_ip_refresh = current_time
+                    # Setup camera
+                    if not self.setup_camera():
+                        print("✗ Failed to initialize camera")
+                        if self.reconnection_enabled and not self.shutdown_requested:
+                            print(f"Retrying in {self.reconnection_delay} seconds...")
+                            for _ in range(self.reconnection_delay):
+                                if self.shutdown_requested:
+                                    break
+                                time.sleep(1)
+                            continue
+                        else:
+                            return False
 
-                        print(f"Retrying in {self.reconnection_delay} seconds...")
-                        for _ in range(self.reconnection_delay):
-                            if self.shutdown_requested:
-                                break
-                            time.sleep(1)
-                        continue
-                    else:
-                        return False
+                    # Setup FFmpeg
+                    if not self.setup_ffmpeg():
+                        print("✗ Failed to initialize ffmpeg")
+                        self.cleanup()
+                        if self.reconnection_enabled and not self.shutdown_requested:
+                            # FFmpeg failure might be due to server IP change - fetch new IP
+                            current_time = time.time()
+                            if (
+                                current_time - self.last_ip_refresh
+                                >= self.ip_refresh_interval
+                            ):
+                                new_ip = self.fetch_streaming_server_ip()
+                                if new_ip:
+                                    self.update_server_ip(new_ip)
+                                self.last_ip_refresh = current_time
+
+                            print(f"Retrying in {self.reconnection_delay} seconds...")
+                            for _ in range(self.reconnection_delay):
+                                if self.shutdown_requested:
+                                    break
+                                time.sleep(1)
+                            continue
+                        else:
+                            return False
 
                 self.running = True
-                print("\n▶ Streaming started (Ctrl+C to stop)...\n")
+                print(
+                    f"\n▶ Streaming started via {self.active_mode.upper()} (Ctrl+C to stop)...\n"
+                )
 
                 # Start streaming
                 self.stream_frames()
@@ -1157,20 +1423,44 @@ class RTSPCameraStreamer:
                     print("Shutdown requested, exiting...")
                     break
 
+                ended_mode = self.active_mode
+                planned_restart = self.mode_switch_requested or self.srt_rollover
+
                 # Connection lost - cleanup and retry if enabled
                 self.cleanup()
+
+                if ended_mode == "srt" and not planned_restart:
+                    # The SRT run died (ffmpeg exit, connection loss, session
+                    # failure): arm the fallback cooldown so the retry below
+                    # resolves to RTSP and counting continues.
+                    self._record_srt_failure("SRT stream ended unexpectedly")
+
                 if self.reconnection_enabled:
+                    if planned_restart:
+                        # Flag flip or session rollover: restart immediately
+                        reason = (
+                            "session rollover"
+                            if self.srt_rollover
+                            else "streaming-mode change"
+                        )
+                        print(f"\n→ Restarting pipeline ({reason})...")
+                        continue
+
                     print(
                         f"\n⚠ Connection lost. Reconnecting in {self.reconnection_delay} seconds..."
                     )
 
-                    # Try to fetch new server IP from API before reconnecting
-                    current_time = time.time()
-                    if current_time - self.last_ip_refresh >= self.ip_refresh_interval:
-                        new_ip = self.fetch_streaming_server_ip()
-                        if new_ip:
-                            self.update_server_ip(new_ip)
-                        self.last_ip_refresh = current_time
+                    if ended_mode == "rtsp":
+                        # Try to fetch new server IP from API before reconnecting
+                        current_time = time.time()
+                        if (
+                            current_time - self.last_ip_refresh
+                            >= self.ip_refresh_interval
+                        ):
+                            new_ip = self.fetch_streaming_server_ip()
+                            if new_ip:
+                                self.update_server_ip(new_ip)
+                            self.last_ip_refresh = current_time
 
                     for _ in range(self.reconnection_delay):
                         if self.shutdown_requested:
@@ -1181,6 +1471,9 @@ class RTSPCameraStreamer:
 
             except Exception as e:
                 print(f"\n✗ Unexpected error: {e}")
+                if self.active_mode == "srt":
+                    # Persistent crashes must not flap the SRT path forever
+                    self._record_srt_failure(f"unexpected error: {e}")
                 self.cleanup()
                 if self.reconnection_enabled and not self.shutdown_requested:
                     print(f"Retrying in {self.reconnection_delay} seconds...")
@@ -1208,6 +1501,15 @@ class RTSPCameraStreamer:
         """Clean up resources - aggressively kills hung processes"""
         print("\nCleaning up...")
         self.running = False
+
+        # End any Upstream session first (SRT runs): stops the keepalive
+        # thread and best-effort POSTs the session stop. Idempotent.
+        if self.upstream:
+            try:
+                self.upstream.stop()
+            except Exception:
+                pass
+            self.upstream = None
 
         # Kill FFmpeg FIRST and IMMEDIATELY - don't try graceful shutdown.
         # When the server is down, ffmpeg gets stuck and stdin.close() blocks
@@ -1352,6 +1654,19 @@ Examples:
         action="store_true",
         help="Use development server ports (MediaMTX API 9998 instead of 9997)",
     )
+    parser.add_argument(
+        "--upstream-api-url",
+        type=str,
+        default=None,
+        help="Upstream control-plane API URL (SRT dual-mode)",
+    )
+    parser.add_argument(
+        "--upstream-token",
+        type=str,
+        default=None,
+        help="Per-device Upstream API token (SRT dual-mode; without it the "
+        "device always streams legacy RTSP)",
+    )
 
     args = parser.parse_args()
 
@@ -1368,6 +1683,8 @@ Examples:
         password=args.password,
         api_url=args.api_url,
         dev_mode=args.dev,
+        upstream_api_url=args.upstream_api_url,
+        upstream_token=args.upstream_token,
     )
 
     try:
