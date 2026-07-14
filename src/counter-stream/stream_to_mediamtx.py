@@ -151,8 +151,16 @@ class RTSPCameraStreamer:
         # After any SRT failure fall back to RTSP and don't re-attempt SRT
         # until this cooldown passes — prevents a broken SRT path from
         # flapping the pipeline while still converging back to SRT on its own.
+        # Persisted to tmpfs so it survives process restarts (a crash-looping
+        # SRT path would otherwise reset its own cooldown every respawn) but
+        # deliberately NOT reboots — a power cycle is a fresh start.
         self.srt_retry_cooldown = 600
+        self._srt_cooldown_file = Path("/tmp/crowdcount-srt-cooldown")
         self.last_srt_failure = 0.0
+        try:
+            self.last_srt_failure = float(self._srt_cooldown_file.read_text().strip())
+        except Exception:
+            pass
         # Set when the legacy (OpenCV/MJPEG) camera path is in use: MJPEG has
         # no standard MPEG-TS payload, so SRT is impossible on that path.
         self.legacy_forced_rtsp = False
@@ -254,6 +262,10 @@ class RTSPCameraStreamer:
             f"  Falling back to RTSP; will re-attempt SRT after {self.srt_retry_cooldown}s"
         )
         self.last_srt_failure = time.time()
+        try:
+            self._srt_cooldown_file.write_text(str(self.last_srt_failure))
+        except Exception:
+            pass
         if self.upstream:
             try:
                 self.upstream.stop()
