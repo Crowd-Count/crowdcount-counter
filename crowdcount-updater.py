@@ -83,6 +83,28 @@ def load_identity() -> tuple:
     raise RuntimeError("Could not load device identity from any known path")
 
 
+def load_update_branch() -> str:
+    """Return the branch this device tracks (device-identity.conf UPDATE_BRANCH).
+
+    Defaults to "main" (the fleet). Bench/canary devices set e.g.
+    UPDATE_BRANCH=feat/upstream-srt-dual-mode to follow a feature branch
+    through the normal OTA machinery instead of disabling the updater.
+    """
+    for path in IDENTITY_PATHS:
+        if path.exists():
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("UPDATE_BRANCH="):
+                            branch = line.split("=", 1)[1].strip()
+                            if branch:
+                                return branch
+            except Exception:
+                pass
+    return "main"
+
+
 def sign_request(
     device_id: str, password: str, method: str, url: str, body: str
 ) -> dict:
@@ -282,8 +304,12 @@ def heal_repo_state() -> None:
 
 
 def check_and_update(device_id: str, password: str) -> None:
-    """Fetch origin/main, hard-reset onto it if changed, restart main service."""
-    logger.info("Checking for updates...")
+    """Fetch the tracked branch, hard-reset onto it if changed, restart main."""
+    branch = load_update_branch()
+    if branch != "main":
+        logger.info("Checking for updates (tracking branch %s)...", branch)
+    else:
+        logger.info("Checking for updates...")
 
     ensure_git_safe_directory()
     heal_repo_state()
@@ -292,7 +318,7 @@ def check_and_update(device_id: str, password: str) -> None:
     # known_hosts entry otherwise kills updates permanently)
     def _fetch():
         return subprocess.run(
-            ["git", "fetch", "origin", "main"],
+            ["git", "fetch", "origin", branch],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
@@ -311,11 +337,12 @@ def check_and_update(device_id: str, password: str) -> None:
         logger.warning("git fetch failed: %s", fetch.stderr.strip())
         return
 
-    # Compare HEAD vs origin/main
+    # Compare HEAD vs the fetched tip. FETCH_HEAD (not origin/<branch>)
+    # so this works regardless of the clone's fetch refspec.
     local = get_current_commit()
     try:
         remote_result = subprocess.run(
-            ["git", "rev-parse", "origin/main"],
+            ["git", "rev-parse", "FETCH_HEAD"],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
