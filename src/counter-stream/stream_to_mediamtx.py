@@ -709,6 +709,23 @@ class RTSPCameraStreamer:
                             for failure in critical_failures:
                                 print(f"  ✗ {failure}")
 
+                            # A terminal Upstream session (ended/expired/failed,
+                            # revoked token) never recovers, so waiting out the
+                            # transient-failure threshold just streams ~2 more
+                            # minutes into a dead path. Restart now — the run
+                            # still ends as an SRT failure, so the RTSP fallback
+                            # cooldown applies and an operator-initiated stop
+                            # isn't fought.
+                            if (
+                                self.active_mode == "srt"
+                                and self.upstream is not None
+                                and self.upstream.is_terminal
+                            ):
+                                print(
+                                    "\n✗ Upstream session unrecoverable - restarting pipeline immediately..."
+                                )
+                                break
+
                             # If API reports device offline AND stream was previously working,
                             # immediately restart. If stream was never healthy, let the normal
                             # failure count handle it (immediate restart would just loop).

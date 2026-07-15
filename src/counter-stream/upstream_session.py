@@ -352,6 +352,16 @@ class UpstreamSessionClient:
             return False
         return (self.expires_at - time.time()) <= ROLLOVER_MARGIN_S
 
+    @property
+    def is_terminal(self):
+        """True when this session can never become healthy again.
+
+        Terminal session states and fatal token errors don't clear on their
+        own — the only recovery is tearing down the pipeline and starting
+        over (fresh session, or RTSP fallback while the cooldown holds).
+        """
+        return bool(self._fatal_error) or self.session_state in TERMINAL_STATES
+
     def check(self):
         """Health verdict for the streamer's periodic checks.
 
