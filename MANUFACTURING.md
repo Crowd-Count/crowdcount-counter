@@ -88,8 +88,14 @@ WIDTH=640
 HEIGHT=480
 FPS=30
 API_URL=https://api.crowdcount.tech
+UPSTREAM_API_URL=https://api.upstreamcv.com
 TAILSCALE_AUTH_KEY=tskey-auth-xxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+`UPSTREAM_API_URL` is the Upstream control plane, used only by devices that
+resolve to SRT mode. It is safe to ship on every device: the per-device
+credential that actually enables SRT (`UPSTREAM_API_TOKEN`) is stamped into
+`device-identity.conf` per device, never here.
 
 ### Step 1.5: Set Up Deploy Key (for Private Repo Auto-Updates)
 
@@ -269,17 +275,37 @@ Location: `/boot/firmware/device-identity.conf`
 ```ini
 [DEFAULT]
 DEVICE_ID=T0001
-DEVICE_SECRET=mysecret123
-DEVICE_PASSWORD=mypassword123
-API_PASSWORD=myapipass123
+DEVICE_SECRET=<bluetooth pairing secret>
+DEVICE_PASSWORD=<ssh password for the counter user>
+API_PASSWORD=<crowdcount api password>
 MANUFACTURING_DATE=2025-01-15
 MODEL=counter-v3
 HARDWARE_VERSION=1.0
 FIRMWARE_VERSION=1.0
 SERIAL_NUMBER=SN20250115T0001
+
+# Optional, written only when supplied:
+UPSTREAM_API_TOKEN=<per-device upstream token>
+UPDATE_BRANCH=<branch the auto-updater tracks>
 ```
 
 This file is on the boot partition and survives OS reflashes.
+
+**`UPSTREAM_API_TOKEN`** enables SRT streaming to Upstream (see
+[Streaming Modes](README.md#streaming-modes)). It is minted per device with
+`scope=device` and binds to that device's Upstream agent on first register
+(trust-on-first-use), so a token stolen from one device cannot register as
+another. A device without it always streams legacy RTSP, whatever its
+`streaming_mode` flag says — this is the outer safety catch on the Upstream
+cutover, so only stamp it on devices intended for Upstream. `flash_device.sh`
+does not prompt for it; pass it as the 6th argument to `customize_sd_card.sh`
+(see that script's usage).
+
+**`UPDATE_BRANCH`** pins the auto-updater to a branch; absent means `main`,
+the fleet deploy. Only bench/canary units should set it. **A device pinned to a
+feature branch must be moved back to `main` *before* that branch is deleted** —
+otherwise its updater fetch fails silently and it stops receiving updates
+entirely.
 
 ### Files Overview
 
