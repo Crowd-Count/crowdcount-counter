@@ -8,11 +8,13 @@ import subprocess
 import time
 import sys
 import argparse
+import re
 import signal
 import threading
 import hashlib
 import hmac as hmac_mod
 import uuid
+from pathlib import Path
 
 try:
     from picamera2 import Picamera2
@@ -43,9 +45,6 @@ except ImportError:
 
 # Import video config - try relative import first, then absolute
 try:
-    import sys
-    from pathlib import Path
-
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from video_config import VIDEO_FPS, VIDEO_WIDTH, VIDEO_HEIGHT
 except ImportError:
@@ -53,6 +52,22 @@ except ImportError:
     VIDEO_FPS = 15
     VIDEO_WIDTH = 640
     VIDEO_HEIGHT = 480
+
+# An SRT URL's query string carries the session passphrase. ffmpeg runs at
+# -loglevel verbose and echoes its own output URL — passphrase and all — into
+# stderr, which this module reprints to journald, so every print of ffmpeg
+# text must go through redact_srt_urls() first.
+_SRT_URL_RE = re.compile(r"srt://[^\s'\"]+")
+
+
+def redact_srt_urls(text):
+    """Strip the credential-bearing query string from any SRT URL in text."""
+
+    def _redact(match):
+        base, sep, _query = match.group(0).partition("?")
+        return f"{base}?<redacted>" if sep else base
+
+    return _SRT_URL_RE.sub(_redact, text)
 
 
 class RTSPCameraStreamer:
@@ -127,6 +142,7 @@ class RTSPCameraStreamer:
         self.ffmpeg_connection_lost = False
         self.ffmpeg_stderr_thread = None
         self.ffmpeg_last_error = None
+        self._ffmpeg_monitor_stop = None
 
         # MediaMTX API port (for checking stream status)
         # Dev server uses port 9998, prod uses 9997
@@ -554,11 +570,19 @@ class RTSPCameraStreamer:
 
             print("✓ FFmpeg process started")
 
-            # Start stderr monitoring thread to detect connection failures early
+            # Start stderr monitoring thread to detect connection failures early.
+            # The thread is bound to THIS run's process + stop event: self.running
+            # is still False here (it is set only once streaming starts), and a
+            # thread gated on it would exit on its first check and silently
+            # disable early connection-loss detection for the whole run.
             self.ffmpeg_connection_lost = False
             self.ffmpeg_last_error = None
+            monitor_stop = threading.Event()
+            self._ffmpeg_monitor_stop = monitor_stop
             self.ffmpeg_stderr_thread = threading.Thread(
-                target=self._monitor_ffmpeg_stderr, daemon=True
+                target=self._monitor_ffmpeg_stderr,
+                args=(self.ffmpeg_process, monitor_stop),
+                daemon=True,
             )
             self.ffmpeg_stderr_thread.start()
 
@@ -568,11 +592,14 @@ class RTSPCameraStreamer:
             print(f"✗ Error setting up ffmpeg: {e}")
             return False
 
-    def _monitor_ffmpeg_stderr(self):
+    def _monitor_ffmpeg_stderr(self, process, stop_event):
         """Monitor FFmpeg stderr for connection errors in a background thread.
 
         Detects connection failures that don't cause FFmpeg to exit immediately
         (e.g., TCP connection reset, timeouts, broken pipe).
+
+        Bound to the process/stop event of the run that spawned it so a thread
+        left over from a previous run can never flag the current one.
         """
         connection_error_patterns = [
             b"Connection refused",
@@ -598,19 +625,17 @@ class RTSPCameraStreamer:
         max_debug_lines = 50
 
         try:
-            while (
-                self.ffmpeg_process
-                and self.ffmpeg_process.poll() is None
-                and self.running
-            ):
+            while process.poll() is None and not stop_event.is_set():
                 # Read stderr line by line (non-blocking would be better but this is simpler)
-                line = self.ffmpeg_process.stderr.readline()
+                line = process.stderr.readline()
                 if not line:
                     break
 
                 # Print initial FFmpeg output to help debug connection issues
                 if lines_printed < max_debug_lines:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
+                    line_str = redact_srt_urls(
+                        line.decode("utf-8", errors="ignore")
+                    ).strip()
                     if line_str:  # Skip empty lines
                         print(f"[FFmpeg] {line_str}")
                         lines_printed += 1
@@ -618,8 +643,10 @@ class RTSPCameraStreamer:
                 # Check for connection error patterns
                 for pattern in connection_error_patterns:
                     if pattern in line:
-                        self.ffmpeg_last_error = line.decode(
-                            "utf-8", errors="ignore"
+                        if stop_event.is_set():
+                            return
+                        self.ffmpeg_last_error = redact_srt_urls(
+                            line.decode("utf-8", errors="ignore")
                         ).strip()
                         self.ffmpeg_connection_lost = True
                         print(
@@ -677,8 +704,10 @@ class RTSPCameraStreamer:
                     # Check if FFmpeg is still alive
                     if self.ffmpeg_process.poll() is not None:
                         print("✗ FFmpeg process died")
-                        stderr = self.ffmpeg_process.stderr.read().decode(
-                            "utf-8", errors="ignore"
+                        stderr = redact_srt_urls(
+                            self.ffmpeg_process.stderr.read().decode(
+                                "utf-8", errors="ignore"
+                            )
                         )
                         if stderr:
                             print("FFmpeg error output:")
@@ -889,8 +918,10 @@ class RTSPCameraStreamer:
                             self.ffmpeg_process
                             and self.ffmpeg_process.poll() is not None
                         ):
-                            stderr = self.ffmpeg_process.stderr.read().decode(
-                                "utf-8", errors="ignore"
+                            stderr = redact_srt_urls(
+                                self.ffmpeg_process.stderr.read().decode(
+                                    "utf-8", errors="ignore"
+                                )
                             )
                             if stderr:
                                 print("FFmpeg error output:")
@@ -1530,6 +1561,12 @@ class RTSPCameraStreamer:
         """Clean up resources - aggressively kills hung processes"""
         print("\nCleaning up...")
         self.running = False
+
+        # Retire this run's stderr monitor before the process it watches goes
+        # away, so it cannot flag the next run's pipeline.
+        if self._ffmpeg_monitor_stop:
+            self._ffmpeg_monitor_stop.set()
+            self._ffmpeg_monitor_stop = None
 
         # End any Upstream session first (SRT runs): stops the keepalive
         # thread and best-effort POSTs the session stop. Idempotent.
