@@ -160,10 +160,17 @@ class RTSPCameraStreamer:
         self.upstream_api_url = upstream_api_url
         self.upstream_token = upstream_token
         self.upstream = None  # active UpstreamSessionClient (SRT runs only)
-        self.requested_mode = None  # last flag value fetched from the API
         self.active_mode = "rtsp"  # transport of the CURRENT pipeline run
         self.flag_poll_interval = 300  # seconds between streaming_mode polls
         self.last_flag_poll = 0.0
+        # Last flag value that the API confirmed, cached across reboots: the Pi
+        # has no RTC, so at boot the clock skew makes signed calls 401 until NTP
+        # lands and an SRT device would stream RTSP until the flag API answers.
+        # Only a seed — the poll below still runs immediately and corrects it,
+        # and it is read AFTER the token/legacy-camera gates and BEFORE the
+        # cooldown gate, so a stale "srt" cannot defeat either.
+        self._flag_cache_file = Path("/var/lib/crowdcount/streaming-mode")
+        self.requested_mode = self._load_cached_mode()
         # After any SRT failure fall back to RTSP and don't re-attempt SRT
         # until this cooldown passes — prevents a broken SRT path from
         # flapping the pipeline while still converging back to SRT on its own.
@@ -171,12 +178,15 @@ class RTSPCameraStreamer:
         # SRT path would otherwise reset its own cooldown every respawn) but
         # deliberately NOT reboots — a power cycle is a fresh start.
         self.srt_retry_cooldown = 600
+        # Quota-shaped 403s ("limit_exceeded.*") are an account-level state a
+        # retry cannot clear, so re-attempting every 10 minutes just tears the
+        # pipeline down for days. Wait out something closer to a billing action.
+        self.srt_quota_cooldown = 6 * 3600
         self._srt_cooldown_file = Path("/tmp/crowdcount-srt-cooldown")
         self.last_srt_failure = 0.0
-        try:
-            self.last_srt_failure = float(self._srt_cooldown_file.read_text().strip())
-        except Exception:
-            pass
+        self.active_srt_cooldown = self.srt_retry_cooldown
+        self._srt_cooldown_logged = False
+        self._load_srt_cooldown()
         # Set when the legacy (OpenCV/MJPEG) camera path is in use: MJPEG has
         # no standard MPEG-TS payload, so SRT is impossible on that path.
         self.legacy_forced_rtsp = False
@@ -186,6 +196,54 @@ class RTSPCameraStreamer:
         # Set when an SRT session approaches its fixed TTL: the pipeline
         # restarts onto a freshly minted session (planned, not a failure).
         self.srt_rollover = False
+
+    def _load_cached_mode(self):
+        """Last API-confirmed streaming_mode from disk (None if unavailable)."""
+        try:
+            mode = self._flag_cache_file.read_text().strip()
+        except Exception:
+            return None
+        if mode in ("rtsp", "srt"):
+            print(f"Cached streaming_mode from last boot: {mode}")
+            return mode
+        return None
+
+    def _store_cached_mode(self, mode):
+        """Cache an API-confirmed streaming_mode. Best-effort; never raises.
+
+        Callers must only write on an actual change: this lands on the SD card
+        and the flag is polled every few minutes for the life of the device.
+        """
+        try:
+            self._flag_cache_file.parent.mkdir(parents=True, exist_ok=True)
+            self._flag_cache_file.write_text(mode)
+        except Exception as e:
+            print(f"⚠ Could not cache streaming_mode: {e}")
+
+    def _load_srt_cooldown(self):
+        """Restore a cooldown armed before this process started.
+
+        File format is "<failed_at> <cooldown_seconds>". A bare "<failed_at>"
+        is the older format and means the default cooldown. Anything missing
+        or unparseable leaves the device with no cooldown at all — the
+        pre-existing behavior, which only ever costs one extra SRT attempt.
+        """
+        try:
+            fields = self._srt_cooldown_file.read_text().split()
+            failed_at = float(fields[0])
+            cooldown = float(fields[1]) if len(fields) > 1 else self.srt_retry_cooldown
+        except Exception:
+            return
+        self.last_srt_failure = failed_at
+        self.active_srt_cooldown = cooldown
+
+    def _srt_cooldown_remaining(self):
+        """Seconds left on the SRT fallback cooldown (0 when not in one)."""
+        if not self.last_srt_failure:
+            return 0.0
+        return max(
+            0.0, self.active_srt_cooldown - (time.time() - self.last_srt_failure)
+        )
 
     def _sign_request(self, method, url, body):
         """Compute HMAC-SHA256 signature headers for API requests."""
@@ -260,26 +318,53 @@ class RTSPCameraStreamer:
         ):
             mode = self.fetch_streaming_mode()
             self.last_flag_poll = now
-            if mode is not None:
+            if mode is not None and mode != self.requested_mode:
                 self.requested_mode = mode
+                self._store_cached_mode(mode)
 
         if self.requested_mode != "srt":
             return "rtsp"
-        if now - self.last_srt_failure < self.srt_retry_cooldown:
-            remaining = self.srt_retry_cooldown - (now - self.last_srt_failure)
-            print(f"SRT in fallback cooldown ({remaining:.0f}s left) - using RTSP")
+        remaining = self._srt_cooldown_remaining()
+        if remaining > 0:
+            # Once per cooldown, not once per 30s health tick
+            if not self._srt_cooldown_logged:
+                print(f"SRT in fallback cooldown ({remaining:.0f}s left) - using RTSP")
+                self._srt_cooldown_logged = True
             return "rtsp"
         return "srt"
 
-    def _record_srt_failure(self, reason):
-        """Note an SRT failure: tear down the session and arm the RTSP fallback."""
+    def _srt_failure_cooldown(self, error):
+        """Cooldown to arm for an Upstream error (None = the default window).
+
+        Quota/limit rejections clear when the account changes, not when the
+        device retries, so they get the long window.
+        """
+        code = getattr(error, "code", None) or ""
+        if code.startswith("limit_exceeded"):
+            return self.srt_quota_cooldown
+        return None
+
+    def _record_srt_failure(self, reason, cooldown=None):
+        """Note an SRT failure: tear down the session and arm the RTSP fallback.
+
+        cooldown defaults to the transient-failure window; callers pass a
+        longer one for failures a prompt retry cannot clear.
+        """
+        self.active_srt_cooldown = (
+            self.srt_retry_cooldown if cooldown is None else cooldown
+        )
         print(f"✗ SRT failure: {reason}")
         print(
-            f"  Falling back to RTSP; will re-attempt SRT after {self.srt_retry_cooldown}s"
+            f"  Falling back to RTSP; will re-attempt SRT after {self.active_srt_cooldown:.0f}s"
         )
         self.last_srt_failure = time.time()
+        self._srt_cooldown_logged = False
         try:
-            self._srt_cooldown_file.write_text(str(self.last_srt_failure))
+            # Persist the DURATION alongside the timestamp: a respawn that read
+            # a bare start time would apply the default window to a long one.
+            self._srt_cooldown_file.write_text(
+                f"{self.last_srt_failure} {self.active_srt_cooldown}"
+            )
         except Exception:
             pass
         if self.upstream:
@@ -1310,7 +1395,9 @@ class RTSPCameraStreamer:
             )
             self.upstream.start()
         except UpstreamError as e:
-            self._record_srt_failure(f"session setup failed: {e}")
+            self._record_srt_failure(
+                f"session setup failed: {e}", cooldown=self._srt_failure_cooldown(e)
+            )
             self.cleanup()
             return False
         except Exception as e:
