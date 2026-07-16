@@ -70,6 +70,23 @@ def redact_srt_urls(text):
     return _SRT_URL_RE.sub(_redact, text)
 
 
+# Upstream rejections that stay true until someone changes the account or the
+# device's stream config — retrying on the normal window just burns pipeline
+# restarts for hours. Deliberately omits limit_exceeded.max_concurrent_sessions,
+# which clears on its own once a stale session is reaped.
+_OPERATOR_ACTION_CODES = frozenset(
+    {
+        "limit_exceeded.monthly_minutes_quota",
+        "limit_exceeded.max_cameras",
+        "limit_exceeded.bitrate_too_high",
+        "limit_exceeded.codec_not_allowed",
+        "limit_exceeded.fps_too_high",
+        "limit_exceeded.resolution_too_high",
+        "limit_exceeded.stream_type_not_allowed",
+    }
+)
+
+
 class RTSPCameraStreamer:
     def __init__(
         self,
@@ -336,13 +353,15 @@ class RTSPCameraStreamer:
     def _srt_failure_cooldown(self, error):
         """Cooldown to arm for an Upstream error (None = the default window).
 
-        Quota/limit rejections clear when the account changes, not when the
-        device retries, so they get the long window.
+        The long window is for rejections that only an operator can clear, so
+        it is an explicit list rather than the whole limit_exceeded family:
+        max_concurrent_sessions is account-wide and self-clearing (an orphaned
+        session from a power-cut elsewhere on the fleet account gets reaped),
+        and pinning a device to RTSP for hours over a race it loses by seconds
+        is the opposite of what that code means.
         """
         code = getattr(error, "code", None) or ""
-        if code.startswith("limit_exceeded"):
-            return self.srt_quota_cooldown
-        return None
+        return self.srt_quota_cooldown if code in _OPERATOR_ACTION_CODES else None
 
     def _record_srt_failure(self, reason, cooldown=None):
         """Note an SRT failure: tear down the session and arm the RTSP fallback.
@@ -599,6 +618,10 @@ class RTSPCameraStreamer:
                     "ffmpeg",
                     "-loglevel",
                     "verbose",  # More detailed logging for debugging
+                    # Progress stats end in \r, so readline() would accumulate
+                    # them into one unbounded "line" between av_log messages —
+                    # real memory on a 512MB Zero 2W across a quiet session.
+                    "-nostats",
                     # Input options (must come before -i)
                     "-fflags",
                     "+genpts",  # Generate PTS (input needs timestamps)

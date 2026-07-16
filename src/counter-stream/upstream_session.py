@@ -29,10 +29,12 @@ HEARTBEAT_INTERVAL_S = 15
 # Bounds the blind window when the Upstream API is partitioned: state polls
 # fail too, so check() would otherwise keep passing on a stale "streaming"
 # state and recovery would wait on server-side session reaping. Generous on
-# purpose — a false positive costs a pipeline restart plus the streamer's SRT
-# fallback cooldown, and the streamer needs several failed checks on top of
-# this before it acts.
-MAX_HEARTBEAT_FAILURES = 8
+# purpose — heartbeats reach the API while the video reaches MediaMTX, so an
+# API-only outage costs nothing while it lasts: SRT keeps flowing and counts
+# keep landing. Tripping early would tear down a working stream and drop it to
+# RTSP for the fallback cooldown; at 15s a beat this waits ~10min, and any
+# successful heartbeat resets the counter.
+MAX_HEARTBEAT_FAILURES = 40
 # State polling: fast until MediaMTX confirms ingest, then relaxed.
 INGEST_CONFIRM_POLL_S = 2
 INGEST_CONFIRM_TIMEOUT_S = 45
