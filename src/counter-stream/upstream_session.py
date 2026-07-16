@@ -25,6 +25,14 @@ from datetime import datetime, timezone
 FIRMWARE_USER_AGENT = "crowdcount-counter/1.0"
 
 HEARTBEAT_INTERVAL_S = 15
+# Consecutive heartbeat failures before check() calls the session unhealthy.
+# Bounds the blind window when the Upstream API is partitioned: state polls
+# fail too, so check() would otherwise keep passing on a stale "streaming"
+# state and recovery would wait on server-side session reaping. Generous on
+# purpose — a false positive costs a pipeline restart plus the streamer's SRT
+# fallback cooldown, and the streamer needs several failed checks on top of
+# this before it acts.
+MAX_HEARTBEAT_FAILURES = 8
 # State polling: fast until MediaMTX confirms ingest, then relaxed.
 INGEST_CONFIRM_POLL_S = 2
 INGEST_CONFIRM_TIMEOUT_S = 45
@@ -372,6 +380,13 @@ class UpstreamSessionClient:
             return False, f"fatal: {self._fatal_error}"
         if self.session_state in TERMINAL_STATES:
             return False, f"session {self.session_state}"
+        if self._heartbeat_failures >= MAX_HEARTBEAT_FAILURES:
+            # Any successful heartbeat resets the counter, so this only trips
+            # on a sustained outage — the session is unreachable, not stale.
+            return False, (
+                f"{self._heartbeat_failures} consecutive heartbeat failures "
+                f"(~{self._heartbeat_failures * HEARTBEAT_INTERVAL_S}s)"
+            )
         if self._streaming_confirmed:
             return True, "session streaming"
         # Not confirmed yet: fine within the confirmation window

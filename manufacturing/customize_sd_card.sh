@@ -230,9 +230,13 @@ echo "Step 4/5: Verifying file..."
 if [ -f "$IDENTITY_FILE" ]; then
     echo -e "${GREEN}✓${NC} File exists and is readable"
     echo ""
-    echo "Contents:"
+    echo "Contents (secret values truncated to 16 chars):"
     echo "─────────────────────────────────────────────────────────"
-    cat "$IDENTITY_FILE"
+    # Truncate the value of every secret-shaped key, matching the 16-char
+    # truncation the confirmation prompt applies to UPSTREAM_API_TOKEN. This
+    # dump only needs to confirm the file's shape, and it outlives the run on
+    # the operator's console.
+    sed -E 's/^([A-Z_]*(SECRET|PASSWORD|TOKEN))=(.{0,16}).*/\1=\3.../' "$IDENTITY_FILE"
     echo "─────────────────────────────────────────────────────────"
 else
     echo -e "${RED}✗ Error: File was not created${NC}"

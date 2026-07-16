@@ -351,6 +351,11 @@ def check_and_update(device_id: str, password: str) -> None:
     except subprocess.TimeoutExpired:
         logger.warning("git rev-parse timed out")
         return
+    if remote_result.returncode != 0:
+        logger.warning(
+            "git rev-parse FETCH_HEAD failed: %s", remote_result.stderr.strip()
+        )
+        return
     remote = remote_result.stdout.strip()
 
     if local == remote:
