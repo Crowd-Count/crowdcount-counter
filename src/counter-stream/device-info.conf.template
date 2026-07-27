@@ -24,6 +24,15 @@ FPS=15
 # CrowdCount API URL for device status updates
 API_URL=https://api.crowdcount.tech
 
+# =============================================================================
+# UPSTREAM STREAMING (SRT dual-mode)
+# =============================================================================
+# The Upstream control-plane API. Only used when this device's streaming_mode
+# flag (fetched from the CrowdCount API via /get_streaming_mode) is "srt".
+# The per-device credential UPSTREAM_API_TOKEN lives in device-identity.conf,
+# NOT here — this file is identical across all devices.
+UPSTREAM_API_URL=https://api.upstreamcv.com
+
 # Tailscale auth key (reusable, same for all devices)
 # Note: Key expiry (90 days) only prevents NEW authentications
 #       Already-authenticated devices continue working indefinitely

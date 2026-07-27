@@ -18,6 +18,16 @@ from pathlib import Path
 
 import requests
 
+# Optional like stream_to_mediamtx's session client: if the module is
+# missing or broken (e.g. a power cut mid-checkout truncated it), the
+# updater must still run — its git reset is the only thing that can heal
+# the file. Broad except: a truncated file raises SyntaxError, not
+# ImportError.
+try:
+    import upstream_enroll
+except Exception:
+    upstream_enroll = None
+
 # ── Configuration ────────────────────────────────────────────────────────
 UPDATE_INTERVAL_SECONDS = 6 * 60 * 60  # 6 hours
 API_BASE_URL = "https://api.crowdcount.tech"
@@ -41,46 +51,104 @@ logger = logging.getLogger("crowdcount-updater")
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
+def _parse_identity(path: Path) -> tuple:
+    """Parse (device_id, password) from one identity file, either possibly None.
+
+    Never raises — a corrupt file reads as (None, None) so the caller can
+    fall back to the .bak copy.
+    """
+    device_id = None
+    password = None
+    try:
+        # Try configparser first
+        config = configparser.ConfigParser()
+        config.read(path)
+        section = (
+            config["DEFAULT"] if "DEFAULT" in config else config[config.sections()[0]]
+        )
+        device_id = section.get("DEVICE_ID") or None
+        password = section.get("API_PASSWORD") or None
+
+        # Fallback: read API_PASSWORD with raw line parsing
+        if device_id and not password:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("API_PASSWORD="):
+                        val = line.split("=", 1)[1].strip()
+                        if val:
+                            password = val
+                            break
+    except Exception as exc:
+        logger.warning("Could not parse %s: %s", path, exc)
+    return device_id, password
+
+
 def load_identity() -> tuple:
     """Load device_id and password from device-identity.conf.
 
-    Returns (device_id, api_password) or raises RuntimeError.
+    Returns (device_id, api_password) or raises RuntimeError. If the
+    primary file is missing or yields no identity (e.g. corrupted by a
+    power cut during the token-enroll rewrite on FAT32, whose rename is
+    not atomic at media level), falls back to the .bak copy the enroll
+    step takes before every write.
     """
     device_id = None
     password = None
 
     for path in IDENTITY_PATHS:
         if path.exists():
-            # Try configparser first
-            config = configparser.ConfigParser()
-            config.read(path)
-            section = (
-                config["DEFAULT"]
-                if "DEFAULT" in config
-                else config[config.sections()[0]]
-            )
-            device_id = section.get("DEVICE_ID") or None
-            password = section.get("API_PASSWORD") or None
-
-            # Fallback: read API_PASSWORD with raw line parsing
-            if device_id and not password:
-                with open(path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("API_PASSWORD="):
-                            val = line.split("=", 1)[1].strip()
-                            if val:
-                                password = val
-                                break
-
+            device_id, password = _parse_identity(path)
             if device_id and password:
                 return device_id, password
+
+        backup = path.with_name(path.name + ".bak")
+        if backup.exists():
+            bak_device_id, bak_password = _parse_identity(backup)
+            if bak_device_id and bak_password:
+                logger.error(
+                    "%s is missing or has no usable identity - "
+                    "RECOVERED identity from backup %s",
+                    path,
+                    backup,
+                )
+                # Best-effort restore of the primary: start_stream.sh
+                # reads only the primary, so without this the stream
+                # stays dead even though the updater recovered.
+                try:
+                    shutil.copy2(backup, path)
+                    logger.info("Restored %s from %s", path, backup)
+                except Exception as exc:
+                    logger.warning("Could not restore %s from backup: %s", path, exc)
+                return bak_device_id, bak_password
 
     if device_id and not password:
         raise RuntimeError(
             f"Device {device_id} found but API_PASSWORD is empty in device-identity.conf"
         )
     raise RuntimeError("Could not load device identity from any known path")
+
+
+def load_update_branch() -> str:
+    """Return the branch this device tracks (device-identity.conf UPDATE_BRANCH).
+
+    Defaults to "main" (the fleet). Bench/canary devices set e.g.
+    UPDATE_BRANCH=feat/upstream-srt-dual-mode to follow a feature branch
+    through the normal OTA machinery instead of disabling the updater.
+    """
+    for path in IDENTITY_PATHS:
+        if path.exists():
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("UPDATE_BRANCH="):
+                            branch = line.split("=", 1)[1].strip()
+                            if branch:
+                                return branch
+            except Exception:
+                pass
+    return "main"
 
 
 def sign_request(
@@ -230,21 +298,84 @@ def ensure_git_safe_directory() -> None:
     )
 
 
+def refresh_github_known_hosts() -> None:
+    """Re-keyscan github.com into root's known_hosts.
+
+    Heals the fetch-dead-forever state where known_hosts EXISTS but its
+    github entry is stale (rotated key) or hashed (so the text check in
+    ensure_root_ssh_access can't see it) — observed wedging p9386 for
+    months with "Host key verification failed".
+    """
+    try:
+        result = subprocess.run(
+            ["ssh-keyscan", "-t", "rsa,ed25519", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            known_hosts = Path("/root/.ssh/known_hosts")
+            known_hosts.parent.mkdir(mode=0o700, exist_ok=True)
+            with open(known_hosts, "a") as f:
+                f.write(result.stdout)
+            known_hosts.chmod(0o600)
+            logger.info("Refreshed GitHub host keys in root known_hosts")
+    except Exception as exc:
+        logger.warning("Could not refresh GitHub host keys: %s", exc)
+
+
+def heal_repo_state() -> None:
+    """Clear wedged git state left by previous failed updates.
+
+    - A half-finished merge (MERGE_HEAD present) blocks every future pull
+      until aborted; nothing else ever aborts it.
+    - Mode-bit changes (install scripts chmod +x tracked files) dirty the
+      tree forever on units where core.fileMode is true, making pulls
+      refuse with "local changes would be overwritten".
+    """
+    subprocess.run(
+        ["git", "config", "core.fileMode", "false"],
+        cwd=REPO_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if (REPO_DIR / ".git" / "MERGE_HEAD").exists():
+        logger.warning("Repo stuck in a merge from a previous run - aborting it")
+        subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+        )
+
+
 def check_and_update(device_id: str, password: str) -> None:
-    """Fetch origin/main, pull if changed, restart main service, report version."""
-    logger.info("Checking for updates...")
+    """Fetch the tracked branch, hard-reset onto it if changed, restart main."""
+    branch = load_update_branch()
+    if branch != "main":
+        logger.info("Checking for updates (tracking branch %s)...", branch)
+    else:
+        logger.info("Checking for updates...")
 
     ensure_git_safe_directory()
+    heal_repo_state()
 
-    # Fetch latest
-    try:
-        fetch = subprocess.run(
-            ["git", "fetch", "origin", "main"],
+    # Fetch latest (one retry after refreshing host keys — a stale
+    # known_hosts entry otherwise kills updates permanently)
+    def _fetch():
+        return subprocess.run(
+            ["git", "fetch", "origin", branch],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
             timeout=60,
         )
+
+    try:
+        fetch = _fetch()
+        if fetch.returncode != 0 and "Host key verification" in fetch.stderr:
+            refresh_github_known_hosts()
+            fetch = _fetch()
     except subprocess.TimeoutExpired:
         logger.warning("git fetch timed out")
         return
@@ -252,11 +383,12 @@ def check_and_update(device_id: str, password: str) -> None:
         logger.warning("git fetch failed: %s", fetch.stderr.strip())
         return
 
-    # Compare HEAD vs origin/main
+    # Compare HEAD vs the fetched tip. FETCH_HEAD (not origin/<branch>)
+    # so this works regardless of the clone's fetch refspec.
     local = get_current_commit()
     try:
         remote_result = subprocess.run(
-            ["git", "rev-parse", "origin/main"],
+            ["git", "rev-parse", "FETCH_HEAD"],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
@@ -264,6 +396,11 @@ def check_and_update(device_id: str, password: str) -> None:
         )
     except subprocess.TimeoutExpired:
         logger.warning("git rev-parse timed out")
+        return
+    if remote_result.returncode != 0:
+        logger.warning(
+            "git rev-parse FETCH_HEAD failed: %s", remote_result.stderr.strip()
+        )
         return
     remote = remote_result.stdout.strip()
 
@@ -273,31 +410,27 @@ def check_and_update(device_id: str, password: str) -> None:
 
     logger.info("Update available: %s -> %s", local[:8], remote[:8])
 
-    # Discard local changes (e.g. chmod +x from install scripts) so pull doesn't fail
-    subprocess.run(
-        ["git", "checkout", "--", "."],
-        cwd=REPO_DIR,
-        capture_output=True,
-        text=True,
-    )
-
-    # Pull
+    # Move EXACTLY onto the fetched commit. Unlike pull (fetch+merge),
+    # reset --hard cannot conflict and is idempotent from any local state —
+    # diverged history, dirty tree, whatever. It only touches TRACKED files:
+    # untracked device config (device-info.conf, identity files) is never
+    # affected. Never add `git clean` here for that same reason.
     try:
-        pull = subprocess.run(
-            ["git", "pull", "origin", "main"],
+        reset = subprocess.run(
+            ["git", "reset", "--hard", remote],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
             timeout=120,
         )
     except subprocess.TimeoutExpired:
-        logger.warning("git pull timed out")
+        logger.warning("git reset timed out")
         return
-    if pull.returncode != 0:
-        logger.error("git pull failed: %s", pull.stderr.strip())
+    if reset.returncode != 0:
+        logger.error("git reset failed: %s", reset.stderr.strip())
         return
 
-    logger.info("Pull complete")
+    logger.info("Update complete")
 
     # Restart main service
     restart = subprocess.run(
@@ -323,6 +456,31 @@ def check_and_update(device_id: str, password: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def enroll_upstream_token(device_id: str, password: str) -> None:
+    """Self-enroll an Upstream token when missing or fatally rejected.
+
+    Delegates to upstream_enroll (a no-op while a healthy token is in
+    place); when a new token lands in the identity file, restarts the
+    main service so start_stream.sh re-reads it.
+    """
+    if upstream_enroll is None:
+        logger.warning("upstream_enroll module unavailable - skipping enrollment")
+        return
+
+    if not upstream_enroll.maybe_enroll(device_id, password, API_BASE_URL):
+        return
+
+    restart = subprocess.run(
+        ["systemctl", "restart", MAIN_SERVICE],
+        capture_output=True,
+        text=True,
+    )
+    if restart.returncode != 0:
+        logger.warning("Failed to restart %s: %s", MAIN_SERVICE, restart.stderr.strip())
+    else:
+        logger.info("Restarted %s to pick up new Upstream token", MAIN_SERVICE)
 
 
 # ── Main loop ────────────────────────────────────────────────────────────
@@ -365,6 +523,13 @@ def main() -> None:
 
     report_version(device_id, password, commit)
 
+    # Self-enroll an Upstream token if this device needs one (missing, or
+    # flagged fatal by the streamer). Isolated so it can never break updates.
+    try:
+        enroll_upstream_token(device_id, password)
+    except Exception as exc:
+        logger.warning("Boot Upstream token enroll failed: %s", exc)
+
     # Check for updates now that network is (likely) up
     try:
         check_and_update(device_id, password)
@@ -374,6 +539,12 @@ def main() -> None:
     # Then check periodically
     while True:
         time.sleep(UPDATE_INTERVAL_SECONDS)
+        # Retry enrollment each cycle - a cold-boot attempt can fail
+        # transiently (e.g. HMAC 401s until NTP syncs the clock)
+        try:
+            enroll_upstream_token(device_id, password)
+        except Exception as exc:
+            logger.warning("Upstream token enroll failed: %s", exc)
         try:
             check_and_update(device_id, password)
         except Exception as exc:

@@ -18,6 +18,16 @@ DEVICE_PASSWORD=
 # API password for status updates to CrowdCount API
 API_PASSWORD=
 
+# Per-device Upstream API token (SRT dual-mode). The device auto-provisions
+# this itself on first boot with current firmware (the updater's enroll step
+# writes it here), so a manufacturing-time value is optional. Without a token
+# the device always streams legacy RTSP, whatever its streaming_mode flag says.
+#UPSTREAM_API_TOKEN=
+
+# Git branch the auto-updater tracks. Defaults to main (the fleet deploy) when
+# absent; set it to pin a device to a pre-release branch.
+#UPDATE_BRANCH=
+
 # Manufacturing information (auto-generated)
 MANUFACTURING_DATE=
 MODEL=counter-v3

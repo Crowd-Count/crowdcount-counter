@@ -23,19 +23,24 @@ echo ""
 if [ $# -lt 5 ]; then
     echo -e "${RED}✗ Error: Missing arguments${NC}"
     echo ""
-    echo "Usage: $0 <device> <device_id> <device_secret> <device_password> <api_password>"
+    echo "Usage: $0 <device> <device_id> <device_secret> <device_password> <api_password> [upstream_api_token]"
     echo ""
     echo "Examples:"
     echo "  $0 /dev/sdb T0003 secret123 counter123 apipass123"
+    echo "  $0 /dev/sdb T0003 secret123 counter123 apipass123 ups_live_XXXXXXXX_xxxxxxxxxxxxxxxxxxxxxx"
     echo ""
     echo "Arguments:"
-    echo "  device           - SD card device (e.g., /dev/sdb, /dev/mmcblk0)"
-    echo "  device_id        - Unique device ID/hostname (5 chars, e.g., T0003)"
-    echo "  device_secret    - Device secret for Bluetooth provisioning"
-    echo "  device_password  - Password for 'counter' user SSH access"
-    echo "  api_password     - Password for CrowdCount API status updates"
+    echo "  device            - SD card device (e.g., /dev/sdb, /dev/mmcblk0)"
+    echo "  device_id         - Unique device ID/hostname (5 chars, e.g., T0003)"
+    echo "  device_secret     - Device secret for Bluetooth provisioning"
+    echo "  device_password   - Password for 'counter' user SSH access"
+    echo "  api_password      - Password for CrowdCount API status updates"
+    echo "  upstream_api_token - OPTIONAL per-device Upstream token (SRT dual-mode)."
+    echo "                      Mint one per device with scope=device:"
+    echo "                      upstream-api-server/scripts/mint_device_tokens.py"
+    echo "                      Without it the device streams legacy RTSP only."
     echo ""
-    echo "All fields are required to ensure proper device configuration."
+    echo "All fields except upstream_api_token are required."
     echo ""
     exit 1
 fi
@@ -45,6 +50,7 @@ DEVICE_ID=$2
 DEVICE_SECRET=$3
 DEVICE_PASSWORD=$4
 API_PASSWORD=$5
+UPSTREAM_API_TOKEN=${6:-}
 MANUFACTURING_DATE=$(date +%Y-%m-%d)
 
 # Safety check
@@ -69,6 +75,11 @@ echo "  Device ID (hostname):  $DEVICE_ID"
 echo "  Device Secret:         $DEVICE_SECRET"
 echo "  Device Password:       $DEVICE_PASSWORD"
 echo "  API Password:          $API_PASSWORD"
+if [ -n "$UPSTREAM_API_TOKEN" ]; then
+    echo "  Upstream Token:        ${UPSTREAM_API_TOKEN:0:16}... (SRT dual-mode enabled)"
+else
+    echo "  Upstream Token:        (none - legacy RTSP only)"
+fi
 echo "  Manufacturing Date:    $MANUFACTURING_DATE"
 echo ""
 echo "Is this correct? (yes/no)"
@@ -200,6 +211,18 @@ FIRMWARE_VERSION=1.0
 SERIAL_NUMBER=SN${MANUFACTURING_DATE//-/}${DEVICE_ID}
 EOF
 
+# Upstream SRT dual-mode: per-device control-plane token (optional).
+# The firmware only attempts SRT when this is present AND the device's
+# streaming_mode flag on the CrowdCount API is set to "srt".
+if [ -n "$UPSTREAM_API_TOKEN" ]; then
+    sudo tee -a "$IDENTITY_FILE" > /dev/null <<EOF
+
+# Per-device Upstream API token (SRT dual-mode). Minted with scope=device
+# (trust-on-first-use: binds to this device's agent on first register).
+UPSTREAM_API_TOKEN=$UPSTREAM_API_TOKEN
+EOF
+fi
+
 echo -e "${GREEN}✓${NC} Created: $IDENTITY_FILE"
 
 echo ""
@@ -207,9 +230,12 @@ echo "Step 4/5: Verifying file..."
 if [ -f "$IDENTITY_FILE" ]; then
     echo -e "${GREEN}✓${NC} File exists and is readable"
     echo ""
-    echo "Contents:"
+    echo "Contents (secret values truncated to 16 chars):"
     echo "─────────────────────────────────────────────────────────"
-    cat "$IDENTITY_FILE"
+    # Truncate the value of every secret-shaped key, matching the 16-char
+    # truncation the confirmation prompt applies to UPSTREAM_API_TOKEN. The
+    # key charset must cover digits, or a future KEY2_TOKEN prints in full.
+    sed -E 's/^([A-Z0-9_]*(SECRET|PASSWORD|TOKEN))=(.{0,16}).*/\1=\3.../' "$IDENTITY_FILE"
     echo "─────────────────────────────────────────────────────────"
 else
     echo -e "${RED}✗ Error: File was not created${NC}"

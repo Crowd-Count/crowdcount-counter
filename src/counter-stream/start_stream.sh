@@ -89,6 +89,10 @@ fi
 # Read API password from device identity file
 API_PASSWORD=$(get_config_value "API_PASSWORD" "" "$IDENTITY_FILE")
 
+# Per-device Upstream token (device identity — written at manufacturing/
+# provisioning time; absent on devices not yet issued Upstream credentials)
+UPSTREAM_API_TOKEN=$(get_config_value "UPSTREAM_API_TOKEN" "" "$IDENTITY_FILE")
+
 # Read remaining configuration from device-info.conf
 SERVER_IP=$(get_config_value "SERVER_IP" "")
 USE_DEV_SERVER=$(get_config_value "USE_DEV_SERVER" "false")
@@ -96,6 +100,7 @@ WIDTH=$(get_config_value "WIDTH" "640")
 HEIGHT=$(get_config_value "HEIGHT" "480")
 FPS=$(get_config_value "FPS" "30")
 API_URL=$(get_config_value "API_URL" "https://api.crowdcount.tech")
+UPSTREAM_API_URL=$(get_config_value "UPSTREAM_API_URL" "https://api.upstreamcv.com")
 
 # Set ports based on USE_DEV_SERVER toggle
 # Production: RTSP 8554, API 5000
@@ -151,6 +156,13 @@ fi
 # Add API URL if provided
 if [ -n "$API_URL" ]; then
     CMD="$CMD --api-url $API_URL"
+fi
+
+# Upstream SRT dual-mode: pass control-plane URL + per-device token when present.
+# Without a token the device can never enter SRT mode (whatever the flag says) —
+# it keeps the legacy RTSP path exactly as before.
+if [ -n "$UPSTREAM_API_TOKEN" ]; then
+    CMD="$CMD --upstream-api-url $UPSTREAM_API_URL --upstream-token $UPSTREAM_API_TOKEN"
 fi
 
 # Start streaming

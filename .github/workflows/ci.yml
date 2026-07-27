@@ -21,6 +21,11 @@ jobs:
 
       - name: Install ruff
         uses: astral-sh/ruff-action@v3
+        with:
+          # Pinned: an unpinned action tracks the latest ruff release, whose
+          # expanding default rule set turned CI red on untouched code
+          # (0.16.0 flagged 188 pre-existing errors on main, 2026-07-27).
+          version: "0.15.21"
 
       - name: Lint
         run: ruff check .
