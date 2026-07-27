@@ -18,6 +18,16 @@ from pathlib import Path
 
 import requests
 
+# Optional like stream_to_mediamtx's session client: if the module is
+# missing or broken (e.g. a power cut mid-checkout truncated it), the
+# updater must still run — its git reset is the only thing that can heal
+# the file. Broad except: a truncated file raises SyntaxError, not
+# ImportError.
+try:
+    import upstream_enroll
+except Exception:
+    upstream_enroll = None
+
 # ── Configuration ────────────────────────────────────────────────────────
 UPDATE_INTERVAL_SECONDS = 6 * 60 * 60  # 6 hours
 API_BASE_URL = "https://api.crowdcount.tech"
@@ -41,40 +51,76 @@ logger = logging.getLogger("crowdcount-updater")
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
+def _parse_identity(path: Path) -> tuple:
+    """Parse (device_id, password) from one identity file, either possibly None.
+
+    Never raises — a corrupt file reads as (None, None) so the caller can
+    fall back to the .bak copy.
+    """
+    device_id = None
+    password = None
+    try:
+        # Try configparser first
+        config = configparser.ConfigParser()
+        config.read(path)
+        section = (
+            config["DEFAULT"] if "DEFAULT" in config else config[config.sections()[0]]
+        )
+        device_id = section.get("DEVICE_ID") or None
+        password = section.get("API_PASSWORD") or None
+
+        # Fallback: read API_PASSWORD with raw line parsing
+        if device_id and not password:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("API_PASSWORD="):
+                        val = line.split("=", 1)[1].strip()
+                        if val:
+                            password = val
+                            break
+    except Exception as exc:
+        logger.warning("Could not parse %s: %s", path, exc)
+    return device_id, password
+
+
 def load_identity() -> tuple:
     """Load device_id and password from device-identity.conf.
 
-    Returns (device_id, api_password) or raises RuntimeError.
+    Returns (device_id, api_password) or raises RuntimeError. If the
+    primary file is missing or yields no identity (e.g. corrupted by a
+    power cut during the token-enroll rewrite on FAT32, whose rename is
+    not atomic at media level), falls back to the .bak copy the enroll
+    step takes before every write.
     """
     device_id = None
     password = None
 
     for path in IDENTITY_PATHS:
         if path.exists():
-            # Try configparser first
-            config = configparser.ConfigParser()
-            config.read(path)
-            section = (
-                config["DEFAULT"]
-                if "DEFAULT" in config
-                else config[config.sections()[0]]
-            )
-            device_id = section.get("DEVICE_ID") or None
-            password = section.get("API_PASSWORD") or None
-
-            # Fallback: read API_PASSWORD with raw line parsing
-            if device_id and not password:
-                with open(path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("API_PASSWORD="):
-                            val = line.split("=", 1)[1].strip()
-                            if val:
-                                password = val
-                                break
-
+            device_id, password = _parse_identity(path)
             if device_id and password:
                 return device_id, password
+
+        backup = path.with_name(path.name + ".bak")
+        if backup.exists():
+            bak_device_id, bak_password = _parse_identity(backup)
+            if bak_device_id and bak_password:
+                logger.error(
+                    "%s is missing or has no usable identity - "
+                    "RECOVERED identity from backup %s",
+                    path,
+                    backup,
+                )
+                # Best-effort restore of the primary: start_stream.sh
+                # reads only the primary, so without this the stream
+                # stays dead even though the updater recovered.
+                try:
+                    shutil.copy2(backup, path)
+                    logger.info("Restored %s from %s", path, backup)
+                except Exception as exc:
+                    logger.warning("Could not restore %s from backup: %s", path, exc)
+                return bak_device_id, bak_password
 
     if device_id and not password:
         raise RuntimeError(
@@ -412,6 +458,31 @@ def check_and_update(device_id: str, password: str) -> None:
     )
 
 
+def enroll_upstream_token(device_id: str, password: str) -> None:
+    """Self-enroll an Upstream token when missing or fatally rejected.
+
+    Delegates to upstream_enroll (a no-op while a healthy token is in
+    place); when a new token lands in the identity file, restarts the
+    main service so start_stream.sh re-reads it.
+    """
+    if upstream_enroll is None:
+        logger.warning("upstream_enroll module unavailable - skipping enrollment")
+        return
+
+    if not upstream_enroll.maybe_enroll(device_id, password, API_BASE_URL):
+        return
+
+    restart = subprocess.run(
+        ["systemctl", "restart", MAIN_SERVICE],
+        capture_output=True,
+        text=True,
+    )
+    if restart.returncode != 0:
+        logger.warning("Failed to restart %s: %s", MAIN_SERVICE, restart.stderr.strip())
+    else:
+        logger.info("Restarted %s to pick up new Upstream token", MAIN_SERVICE)
+
+
 # ── Main loop ────────────────────────────────────────────────────────────
 
 
@@ -452,6 +523,13 @@ def main() -> None:
 
     report_version(device_id, password, commit)
 
+    # Self-enroll an Upstream token if this device needs one (missing, or
+    # flagged fatal by the streamer). Isolated so it can never break updates.
+    try:
+        enroll_upstream_token(device_id, password)
+    except Exception as exc:
+        logger.warning("Boot Upstream token enroll failed: %s", exc)
+
     # Check for updates now that network is (likely) up
     try:
         check_and_update(device_id, password)
@@ -461,6 +539,12 @@ def main() -> None:
     # Then check periodically
     while True:
         time.sleep(UPDATE_INTERVAL_SECONDS)
+        # Retry enrollment each cycle - a cold-boot attempt can fail
+        # transiently (e.g. HMAC 401s until NTP syncs the clock)
+        try:
+            enroll_upstream_token(device_id, password)
+        except Exception as exc:
+            logger.warning("Upstream token enroll failed: %s", exc)
         try:
             check_and_update(device_id, password)
         except Exception as exc:

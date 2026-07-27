@@ -18,11 +18,19 @@ expiry surfaces as needs_rollover, and the streamer restarts the pipeline
 onto a freshly minted session — a brief controlled restart once per TTL.
 """
 
+import json
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 FIRMWARE_USER_AGENT = "crowdcount-counter/1.0"
+
+# Flags the updater's enroll step to re-provision the device token. On
+# tmpfs, so it vanishes on reboot — fine, a still-fatal token just writes
+# it again. (Path duplicated in upstream_enroll.py: this script stays
+# standalone.)
+TOKEN_FATAL_SENTINEL = Path("/tmp/crowdcount-upstream-token-fatal")
 
 HEARTBEAT_INTERVAL_S = 15
 # Consecutive heartbeat failures before check() calls the session unhealthy.
@@ -50,6 +58,10 @@ CAMERA_SOURCE_TYPE = "webcam"
 WORKLOAD_CAPABILITY = "overhead-people-counter-line-crossing"
 
 TERMINAL_STATES = ("ended", "expired", "failed")
+
+# Token rejections that can never heal without re-provisioning the device
+# token — wherever they surface, the re-provision sentinel must be written.
+FATAL_TOKEN_CODES = ("token_revoked", "token_expired")
 
 
 class UpstreamError(Exception):
@@ -172,8 +184,19 @@ class UpstreamSessionClient:
         """Register agent + camera and mint a session. Returns the SRT URL.
 
         Raises UpstreamError on any failure — the streamer treats that as
-        an SRT failure and falls back to RTSP.
+        an SRT failure and falls back to RTSP. A fatal token rejection
+        still flags the token for re-provisioning first: a token that dies
+        while no session is live only ever surfaces here, and without the
+        sentinel the device could never re-enroll.
         """
+        try:
+            return self._register_and_mint()
+        except UpstreamError as e:
+            if e.code in FATAL_TOKEN_CODES:
+                self._record_fatal_token_error(e)
+            raise
+
+    def _register_and_mint(self):
         agent = self._request(
             "POST",
             "/v1/agents/register",
@@ -307,6 +330,24 @@ class UpstreamSessionClient:
 
             self._stop_event.wait(1)
 
+    def _record_fatal_token_error(self, e):
+        """Mark the token fatally rejected and flag it for re-provisioning.
+
+        The sentinel tells the updater's enroll step to mint a fresh token
+        on its next cycle. Best-effort and token-free: only the error code
+        and a timestamp land on disk.
+        """
+        first = self._fatal_error is None
+        self._fatal_error = str(e)
+        if not first:
+            return
+        try:
+            TOKEN_FATAL_SENTINEL.write_text(
+                json.dumps({"reason": e.code, "at": _utc_now_iso()}) + "\n"
+            )
+        except Exception:
+            pass
+
     def _send_heartbeat(self):
         try:
             self._request(
@@ -332,9 +373,9 @@ class UpstreamSessionClient:
             )
             self._heartbeat_failures = 0
         except UpstreamError as e:
-            if e.code in ("token_revoked", "token_expired"):
+            if e.code in FATAL_TOKEN_CODES:
                 # Unrecoverable without re-provisioning the device token
-                self._fatal_error = str(e)
+                self._record_fatal_token_error(e)
                 return
             self._heartbeat_failures += 1
             print(f"⚠ Upstream heartbeat failed ({self._heartbeat_failures}): {e}")
@@ -347,8 +388,8 @@ class UpstreamSessionClient:
                 self._streaming_confirmed = True
                 print("✓ Upstream ingest confirmed (session streaming)")
         except UpstreamError as e:
-            if e.code in ("token_revoked", "token_expired"):
-                self._fatal_error = str(e)
+            if e.code in FATAL_TOKEN_CODES:
+                self._record_fatal_token_error(e)
             else:
                 # Transient - keep the last known state
                 print(f"⚠ Upstream session poll failed: {e}")
