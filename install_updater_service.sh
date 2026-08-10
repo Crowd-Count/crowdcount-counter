@@ -81,6 +81,16 @@ StandardError=journal
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
+# Point root's git at the counter user's SSH world. The updater sets this
+# itself in _git_env(), but having it on the unit means a device is correct
+# even before that code runs — and makes the dependency visible to anyone
+# reading the unit rather than buried in Python.
+#
+# NOTE: no -i here. The counter config uses `IdentityFile ~/.ssh/...` and
+# OpenSSH expands ~ from the PASSWD DATABASE, not \$HOME, so as root it
+# resolves to /root and the key is not found. _git_env() resolves identities
+# to absolute paths at runtime; this line is the coarse fallback.
+Environment=GIT_SSH_COMMAND=ssh -F /home/counter/.ssh/config -o UserKnownHostsFile=/home/counter/.ssh/known_hosts -o StrictHostKeyChecking=accept-new
 
 # Allow time for network + firstboot SSH key setup
 ExecStartPre=/bin/sleep 15

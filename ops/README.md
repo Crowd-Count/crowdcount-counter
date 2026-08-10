@@ -1,0 +1,144 @@
+# Fleet operations
+
+Tooling for the failure class where a counter is **alive but disconnected** —
+streaming video normally while unreachable by the control plane. Two devices
+sat in that state for 27 and 44 hours on 2026-08-08 and nothing noticed,
+because every individual signal read "healthy". Only the contradiction between
+signals revealed the fault.
+
+## Outstanding configuration
+
+These are the two things standing between "the tooling exists" and "this can
+never go unnoticed again". Both are config, not code.
+
+### 1. `SLACK_OPS_WEBHOOK_URL` is not set — the detector cannot page
+
+The server-side monitor (`crowdcount-server/src/crowdcount/core/fleet_health_monitor.py`)
+is deployed and evaluating correctly, but with no webhook it computes alerts
+and logs them to stdout instead of sending them. **Until this is set, detection
+exists but nobody is told.**
+
+Deliberately a *separate* webhook from `SLACK_WEBHOOK_URL`, which carries ad
+and report submissions. Mixing "a camera has been dark for 27 hours" into a
+product-notification stream is how an alert channel stops being read — and an
+unread channel is indistinguishable from the monitoring we had before.
+
+To enable:
+
+1. Create a Slack incoming webhook pointed at an ops channel.
+2. Set `SLACK_OPS_WEBHOOK_URL=https://hooks.slack.com/...` in
+   `crowdcount-server/deploy/.env` (or wherever prod env lives).
+3. Recreate **both** blue and green — each runs its own monitor thread.
+4. Confirm: `docker compose logs | grep "Fleet health monitor initialized"`
+   appears twice (once per container) but the channel receives **one** message.
+   Duplicate messages mean the shared-SQLite claim is not working; see
+   `key_manager.claim_alert`.
+
+Verified against live fleet state on 2026-08-10, the monitor would have sent
+exactly these and nothing else:
+
+```
+L3611   dark_but_streaming     ← the 44-hour device
+G7193   went_dark  (50h)
+O2652   went_dark  (49h)
+Y1866   went_dark  (26h)
+Z6341   went_dark  (63h)
+false positives: none  (32 of 44 rows correctly excluded as decommissioned)
+```
+
+### 2. Tailscale ACL — crowdcounts2 cannot SSH to counters
+
+`reconcile` is what makes the repair continuous rather than a one-off sweep,
+and it is meant to run on a timer on **crowdcounts2**. That box is online 24/7,
+already on the tailnet, and when it *is* down the whole pipeline is down
+anyway, so it loses nothing by being unavailable then. Detection is unaffected
+either way — the monitor runs on the EC2 api-server, not here.
+
+It does not work yet:
+
+```
+$ ssh counter@c4804     # from crowdcounts2
+tailscale: tailnet policy does not permit you to SSH to this node
+```
+
+crowdcounts2 authenticates as `tagged-devices`; the SSH grant currently covers
+only the operator identity. Add a grant in the Tailscale admin console allowing
+crowdcounts2's tag to SSH as `counter` on the counter nodes, then install the
+timer below.
+
+**Do not install the cron before this works.** A reconciler that fails silently
+every 15 minutes is precisely the shape of the bug this whole effort exists to
+eliminate.
+
+Once the ACL is in place, on crowdcounts2 (`crontab -e`, no sudo needed):
+
+```cron
+*/15 * * * * FLEET_QUIET=1 /home/crowdcounts2/Documents/CrowdCount/crowdcount-counter/ops/fleet_ssh.sh reconcile
+```
+
+`FLEET_QUIET=1` suppresses output on a clean pass, so cron only mails when
+something actually changed or needs a human. Exit code is 2 when a device needs
+attention.
+
+---
+
+## `fleet_ssh.sh`
+
+Runs on an operator machine, never on a Pi. Uses Tailscale SSH, which survives
+both observed failure modes: it needs no DNS (tailnet IPs) and no working
+updater. That last part matters — see the deadlock note below.
+
+| Command | Effect |
+|---|---|
+| `list` | read-only survey: HEAD, CorpDNS, DNS, updater state |
+| `immunize-dns [HOST…]` | stop Tailscale managing `/etc/resolv.conf` |
+| `reconcile [HOST…]` | repair drift on whatever is online; safe for cron |
+| `unwedge HOST…` | full recovery for a device frozen on old firmware |
+
+With no hosts, commands target every online counter. `immunize-dns` and
+`unwedge` prompt before acting; `FLEET_ASSUME_YES=1` skips that for automation.
+
+### The bootstrap deadlock
+
+`ensure_root_ssh_config()` in `crowdcount-updater.py` is a self-heal for
+exactly the fault that froze L3611 — but it was added in `5598f37`, *after* the
+commit L3611 is stuck on. The fix for the update bug shipped in an update the
+broken device cannot fetch.
+
+That generalises: **anything delivered through the updater can never repair a
+broken updater.** Hence this tooling, out-of-band, over a channel that does not
+depend on the thing being repaired.
+
+### DNS repair is two steps, not one
+
+`tailscale set --accept-dns=false` alone is not sufficient, and assuming it was
+cost an hour of debugging. Observed on P4516: Tailscale handed `/etc/resolv.conf`
+back to NetworkManager, but NM never re-rendered it — the file was left as a
+bare `# Generated by NetworkManager` header with **zero nameserver lines**, so
+DNS stayed dead while looking clean. NM had held the correct DHCP resolver the
+whole time.
+
+`nmcli general reload dns-rc` re-renders it. Deliberately not `nmcli con up`,
+`dev reapply`, or a NetworkManager restart: those bounce wlan0, which drops
+Tailscale, which drops the SSH session performing the repair — on a device
+nobody may be able to physically reach.
+
+Use `tailscale set`, never `tailscale up`, for the same reason: `up`
+renegotiates and can kill the session issuing it.
+
+---
+
+## Known gaps
+
+- **SRT devices have no stream-liveness signal on the CrowdCount side.** Stream
+  keepalives come from the counter-server's RTSP processor loop, which has no
+  SRT awareness. As the fleet migrates to SRT this widens; the authoritative
+  signal for those devices lives in Upstream's `agents.last_seen_at`, and
+  nothing currently reconciles the two.
+- **`streaming_mode` records intent, not reality.** L3611 is stored as `srt`
+  while physically publishing RTSP, because the column defaults to `srt` and it
+  has no settings row. Anything branching on that column is unreliable; branch
+  on observed evidence instead.
+- **Fleet git remotes are split** between `elkanbruha/` and `Crowd-Count/`.
+  Both currently fetch, so this is untidy rather than broken — but see
+  `MANUFACTURING.md`, where the remote is set by a hand-typed step.

@@ -10,6 +10,7 @@ import hashlib
 import hmac as hmac_mod
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -175,6 +176,64 @@ def sign_request(
     }
 
 
+def _git_env() -> dict:
+    """Environment for git, pinned to the counter user's SSH configuration.
+
+    The updater runs as root (User=root in crowdcount-updater.service), so git
+    resolves SSH against /root/.ssh — a *copy* of the counter user's config
+    made once at firstboot. On L3611 that copy never happened, so root could
+    not resolve the `github-crowdcount-counter-ro` host alias and every fetch
+    failed for weeks:
+
+        git fetch failed: ssh: Could not resolve hostname
+        github-crowdcount-counter-ro: No address associated with hostname
+
+    while the identical fetch as the counter user worked instantly.
+
+    Rather than keep two copies in sync, point root at the single source of
+    truth. This also retires the stale-key bug in ensure_root_ssh_config(),
+    which skips copying whenever the destination already exists and therefore
+    never refreshes a rotated key.
+    """
+    env = dict(os.environ)
+    counter_ssh = Path("/home/counter/.ssh")
+    config = counter_ssh / "config"
+    if not config.exists():
+        return env
+
+    # Identity paths MUST be resolved to absolute here. The config says
+    #     IdentityFile ~/.ssh/id_ed25519_crowdcount_counter_ro
+    # and OpenSSH expands `~` from the PASSWD DATABASE, not $HOME — so running
+    # as root it becomes /root/.ssh/... and the key is simply not found.
+    # Verified on L3611: `-F` alone still failed with
+    #     debug1: identity file /root/.ssh/id_ed25519_... type -1
+    # and setting HOME=/home/counter did not help, because ssh never consults
+    # HOME for this. Passing -i with an absolute path is what actually works.
+    identities = []
+    try:
+        for line in config.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("identityfile"):
+                raw = stripped.split(None, 1)[1].strip().strip('"')
+                if raw.startswith("~/"):
+                    raw = str(counter_ssh.parent / raw[2:])
+                path = Path(raw)
+                if path.exists():
+                    identities.append(path)
+    except Exception as exc:  # unreadable config: fall back to root's own setup
+        logger.warning("Could not parse %s: %s", config, exc)
+        return env
+
+    parts = [f"ssh -F {config}"]
+    parts += [f"-i {p}" for p in identities]
+    if identities:
+        parts.append("-o IdentitiesOnly=yes")
+    parts.append(f"-o UserKnownHostsFile={counter_ssh / 'known_hosts'}")
+    parts.append("-o StrictHostKeyChecking=accept-new")
+    env["GIT_SSH_COMMAND"] = " ".join(parts)
+    return env
+
+
 def get_current_commit() -> str:
     """Return the current HEAD commit hash via git rev-parse (handles packed refs)."""
     try:
@@ -194,16 +253,32 @@ def get_current_commit() -> str:
         return ""
 
 
-def report_version(device_id: str, password: str, commit_hash: str) -> None:
-    """POST the current commit hash to the API server."""
+def report_version(
+    device_id: str,
+    password: str,
+    commit_hash: str,
+    update_error: str | None = None,
+) -> None:
+    """POST the current commit hash to the API server.
+
+    ``update_error`` carries WHY an update failed, so the server can tell a
+    frozen device from a current one. Without it a stuck device reports its
+    stale commit successfully every 6h and looks perfectly healthy — which is
+    how L3611 sat frozen for 44 hours with the reason sitting in a local
+    journal nobody reads.
+
+    Pass "" on the success path to clear a previously reported error;
+    ``None`` omits the field entirely (server leaves any stored value alone).
+    """
     url = f"{API_BASE_URL}/report_version"
-    payload = json.dumps(
-        {
-            "device_id": device_id,
-            "password": password,
-            "commit_hash": commit_hash,
-        }
-    )
+    body = {
+        "device_id": device_id,
+        "password": password,
+        "commit_hash": commit_hash,
+    }
+    if update_error is not None:
+        body["update_error"] = update_error[:300]
+    payload = json.dumps(body)
     headers = {
         "Content-Type": "application/json",
         "Idempotency-Key": str(uuid.uuid4()),
@@ -369,6 +444,7 @@ def check_and_update(device_id: str, password: str) -> None:
             capture_output=True,
             text=True,
             timeout=60,
+            env=_git_env(),
         )
 
     try:
@@ -380,7 +456,15 @@ def check_and_update(device_id: str, password: str) -> None:
         logger.warning("git fetch timed out")
         return
     if fetch.returncode != 0:
-        logger.warning("git fetch failed: %s", fetch.stderr.strip())
+        err = fetch.stderr.strip()
+        logger.warning("git fetch failed: %s", err)
+        # Tell the server. This log line existed before and was the ONLY record
+        # that L3611 had been unable to update for weeks — invisible to anyone
+        # not SSH'd into that specific device. Reporting it turns a silent
+        # freeze into a Slack alert on the next cycle.
+        report_version(
+            device_id, password, get_current_commit(), update_error=f"git fetch: {err}"
+        )
         return
 
     # Compare HEAD vs the fetched tip. FETCH_HEAD (not origin/<branch>)
@@ -406,6 +490,11 @@ def check_and_update(device_id: str, password: str) -> None:
 
     if local == remote:
         logger.info("Already up to date (%s)", local[:8])
+        # Clear any previously reported failure. This is the common success
+        # path (most cycles are no-ops), so it is what un-flags a device that
+        # has recovered — e.g. one whose DNS was repaired. Without it a device
+        # stays flagged forever after a single transient failure.
+        report_version(device_id, password, local, update_error="")
         return
 
     logger.info("Update available: %s -> %s", local[:8], remote[:8])
@@ -443,9 +532,10 @@ def check_and_update(device_id: str, password: str) -> None:
     else:
         logger.info("Restarted %s", MAIN_SERVICE)
 
-    # Report new version
+    # Report new version, clearing any prior failure — we just updated, so
+    # whatever was previously blocking this device is demonstrably resolved.
     new_commit = get_current_commit()
-    report_version(device_id, password, new_commit)
+    report_version(device_id, password, new_commit, update_error="")
 
     # Restart ourselves so the updater runs the new code too.
     # --no-block queues the restart asynchronously so we can finish logging
