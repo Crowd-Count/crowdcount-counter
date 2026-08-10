@@ -342,6 +342,21 @@ class CrowdCountMain:
 
     def authenticate_tailscale(self):
         """Authenticate Tailscale with auth key and device hostname"""
+        # FIRST, unconditionally, before ANY early return below.
+        #
+        # DNS policy is not conditional on authentication. A device with no
+        # auth key, or with tailscaled down, can still have MagicDNS holding
+        # /etc/resolv.conf from a previous session — and that is exactly the
+        # device we most need to fix, because it has no working tunnel to
+        # reach it through either.
+        #
+        # This was originally placed below the two guards, which meant y1866
+        # (no TAILSCALE_AUTH_KEY in device-info.conf) took the OTA, ran the new
+        # code, and still came back with CorpDNS=true — the fix silently did
+        # not apply to it. Caught only because the device happened to return
+        # while the fleet was being surveyed.
+        self.ensure_dns_policy()
+
         if not self.tailscale_auth_key:
             print("⚠ No Tailscale auth key configured, skipping authentication")
             return False
@@ -350,13 +365,6 @@ class CrowdCountMain:
         if not self.ensure_tailscaled_running():
             print("⚠ Cannot authenticate — tailscaled is not running")
             return False
-
-        # Runs on BOTH paths, before the already-authenticated early return.
-        # The `--accept-dns=false` flag below only applies to a fresh
-        # `tailscale up`; an already-authenticated device never re-evaluates
-        # that argv, so without this the entire existing fleet would stay
-        # exposed forever and the OTA would fix nothing.
-        self.ensure_dns_policy()
 
         try:
             # Check if already authenticated
