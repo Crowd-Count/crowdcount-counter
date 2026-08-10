@@ -301,12 +301,17 @@ cmd_reconcile() {
       hh=${entry%%=*}; hv=${entry##*=}
       [ "$hv" = "$modal" ] && continue
       [ "$hv" = "?" ] && continue
-      # Behind the fleet. Say whether the updater is also erroring, because
-      # that distinguishes "stuck and broken" from "mid-rollout".
+      # Only actionable when the updater is ALSO failing. A device on a
+      # different commit with a healthy updater converges by itself within one
+      # cycle — flagging it is noise.
+      #
+      # And the direction cannot be inferred from the modal commit anyway.
+      # During a rollout the first devices to update are the minority, so an
+      # earlier version of this reported them as "behind fleet" when they were
+      # in fact ahead. Wrong AND useless: exactly the kind of alert that trains
+      # people to ignore the channel.
       if printf '%s\n' "${fetch_failed[@]}" | grep -qx "$hh"; then
-        problems+=("$hh: frozen at $hv (fleet=$modal) AND updater cannot fetch — run: $0 unwedge $hh")
-      else
-        problems+=("$hh: behind fleet at $hv (fleet=$modal) — updater not erroring; may be mid-update")
+        problems+=("$hh: on $hv (fleet majority=$modal) AND updater cannot fetch — run: $0 unwedge $hh")
       fi
     done
   fi
