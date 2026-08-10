@@ -85,8 +85,30 @@ confirm() {
 # ---------------------------------------------------------------------------
 # list — read-only survey
 # ---------------------------------------------------------------------------
+# The commit devices SHOULD be on. Resolved from the remote, because the
+# obvious local answers are both wrong in practice:
+#   - your local HEAD may be a branch, or stale
+#   - the commit you merged is NOT what devices report. GitHub creates a MERGE
+#     commit, and `git reset --hard FETCH_HEAD` lands devices on that. Merging
+#     f53b2d6 put the fleet on bbe9712, which CONTAINS it — comparing against
+#     the branch commit makes a fully-updated fleet look like it never updated.
+expected_head() {
+  if [ -n "${FLEET_EXPECTED_HEAD:-}" ]; then echo "${FLEET_EXPECTED_HEAD:0:7}"; return; fi
+  local branch="${FLEET_BRANCH:-main}" sha=""
+  sha=$(git -C "$(dirname "$0")/.." ls-remote origin "$branch" 2>/dev/null | awk '{print $1}')
+  [ -z "$sha" ] && sha=$(gh api "repos/Crowd-Count/crowdcount-counter/commits/$branch" --jq .sha 2>/dev/null)
+  echo "${sha:0:7}"
+}
+
 cmd_list() {
-  printf '%-8s %-9s %-9s %-7s %-6s %s\n' HOST HEAD CorpDNS DNS UPD FETCH_ERRS
+  local want
+  want=$(expected_head)
+  if [ -n "$want" ]; then
+    echo "expected HEAD (origin/${FLEET_BRANCH:-main}): $want"
+  else
+    warn "could not resolve expected HEAD; UPD? column will show '?'"
+  fi
+  printf '%-8s %-9s %-5s %-9s %-7s %-6s %s\n' HOST HEAD UPD? CorpDNS DNS SVC FETCH_ERRS
   for h in $(resolve_hosts "$@"); do
     out=$(rsh "$h" '
       H=$(cd '"$REPO_DIR"' 2>/dev/null && git log --format=%h -1 2>/dev/null || echo "?")
@@ -97,7 +119,11 @@ cmd_list() {
       echo "$H|$C|$D|$U|$E"')
     if [ -z "$out" ]; then printf '%-8s %s\n' "$h" "(unreachable)"; continue; fi
     IFS='|' read -r H C D U E <<<"$out"
-    printf '%-8s %-9s %-9s %-7s %-6s %s\n' "$h" "$H" "$C" "$D" "$U" "$E"
+    if [ -z "$want" ]; then upd="?"
+    elif [ "$H" = "$want" ]; then upd="yes"
+    else upd="NO"
+    fi
+    printf '%-8s %-9s %-5s %-9s %-7s %-6s %s\n' "$h" "$H" "$upd" "$C" "$D" "$U" "$E"
   done
 }
 
