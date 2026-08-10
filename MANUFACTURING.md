@@ -105,14 +105,29 @@ The updater service needs to `git pull` from a private GitHub repo. Generate a d
 
 ```bash
 # Generate an SSH keypair (no passphrase)
-ssh-keygen -t ed25519 -C "crowdcount-deploy" -f /home/counter/.ssh/crowdcount_deploy -N ""
+ssh-keygen -t ed25519 -C "crowdcount-deploy" \
+  -f /home/counter/.ssh/id_ed25519_crowdcount_counter_ro -N ""
 
-# Configure SSH to use this key for GitHub
+# Configure SSH to use this key for GitHub.
+#
+# Two things here are load-bearing — both caused a real multi-week outage:
+#
+# 1. ALWAYS use an ABSOLUTE IdentityFile path. Never `~/.ssh/...`. The updater
+#    runs as root, and OpenSSH expands `~` from the PASSWD DATABASE (not $HOME),
+#    so a tilde path silently resolves to /root/.ssh/... where the key does not
+#    exist. L3611 shipped with a tilde path and its updater could never fetch:
+#        git fetch failed: ssh: Could not resolve hostname
+#        github-crowdcount-counter-ro: No address associated with hostname
+#    It stayed frozen on old firmware for weeks with no outward symptom.
+#
+# 2. The Host alias must match what `git remote` uses (Step 1.6 below). The
+#    alias exists so this key is used ONLY for this repo, never for other
+#    github.com access on the device.
 cat >> /home/counter/.ssh/config <<'EOF'
-Host github.com
+Host github-crowdcount-counter-ro
     HostName github.com
     User git
-    IdentityFile /home/counter/.ssh/crowdcount_deploy
+    IdentityFile /home/counter/.ssh/id_ed25519_crowdcount_counter_ro
     IdentitiesOnly yes
 EOF
 
@@ -135,11 +150,27 @@ cat /home/counter/.ssh/crowdcount_deploy.pub
 
 ```bash
 cd /home/counter/crowdcount-counter
-git remote set-url origin git@github.com:YOUR_ORG/crowdcount-counter.git
 
-# Test it works
+# Use the SSH ALIAS from Step 1.5, not github.com — that is what binds this
+# repo to the read-only deploy key. Org is Crowd-Count (the live fleet is split
+# between Crowd-Count/ and elkanbruha/; both currently redirect, but new
+# devices should be provisioned consistently).
+git remote set-url origin git@github-crowdcount-counter-ro:Crowd-Count/crowdcount-counter.git
+
+# Test it works AS THE COUNTER USER
 git fetch origin main
+
+# ...and then AS ROOT, which is what the updater service actually runs as.
+# This second check is the one that matters: the counter user succeeding tells
+# you nothing about whether the updater can fetch, and that gap is exactly how
+# a device ships looking fine and never updates again.
+sudo git -C /home/counter/crowdcount-counter fetch origin main
 ```
+
+If the root check fails, do not ship the device. Verify:
+- `/root/.ssh/config` exists and contains the `github-crowdcount-counter-ro` alias
+  (written by `crowdcount-firstboot.py:setup_root_ssh_keys`), and
+- every `IdentityFile` path in it is absolute, not `~`-relative.
 
 ### Step 1.6: Test Everything
 
