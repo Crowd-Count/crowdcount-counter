@@ -70,16 +70,38 @@ class CrowdCountMain:
         for identity_path in IDENTITY_PATHS:
             if identity_path.exists():
                 try:
+                    # Manufacturing/provisioning writes this file as plain
+                    # KEY=VALUE, while a few older images used an INI
+                    # [DEFAULT] section. The streaming shell script already
+                    # accepts the plain form; the heartbeat path must do the
+                    # same or a camera can stream without ever identifying
+                    # itself to the CrowdCount API.
+                    raw_values = {}
+                    with open(identity_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#") or "=" not in line:
+                                continue
+                            key, value = line.split("=", 1)
+                            raw_values[key.strip()] = value.strip()
+
                     config = configparser.ConfigParser()
-                    config.read(identity_path)
-                    section = (
-                        config["DEFAULT"]
-                        if "DEFAULT" in config
-                        else config[config.sections()[0]]
+                    try:
+                        config.read(identity_path)
+                        section = (
+                            config["DEFAULT"]
+                            if "DEFAULT" in config
+                            else config[config.sections()[0]]
+                        )
+                    except (configparser.Error, IndexError):
+                        section = {}
+
+                    self.device_id = raw_values.get("DEVICE_ID") or section.get(
+                        "DEVICE_ID"
                     )
-                    self.device_id = section.get("DEVICE_ID", None)
-                    # Also read API password for version reporting
-                    self.api_password = section.get("API_PASSWORD", None) or None
+                    self.api_password = raw_values.get("API_PASSWORD") or section.get(
+                        "API_PASSWORD"
+                    )
                     if self.device_id:
                         print(
                             f"✓ Loaded device identity: {self.device_id} from {identity_path}"
