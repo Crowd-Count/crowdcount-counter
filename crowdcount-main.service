@@ -1,7 +1,7 @@
 [Unit]
 Description=CrowdCount Main Service (Provisioning + Streaming)
-After=network-online.target bluetooth.target tailscaled.service crowdcount-firstboot.service
-Wants=network-online.target bluetooth.target tailscaled.service
+After=network-online.target bluetooth.target crowdcount-firstboot.service
+Wants=network-online.target bluetooth.target
 
 [Service]
 Type=simple

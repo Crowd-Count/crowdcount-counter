@@ -69,16 +69,38 @@ class CrowdCountMain:
         for identity_path in IDENTITY_PATHS:
             if identity_path.exists():
                 try:
+                    # Manufacturing/provisioning writes this file as plain
+                    # KEY=VALUE, while a few older images used an INI
+                    # [DEFAULT] section.  The streaming shell script already
+                    # accepts the plain form; the heartbeat path must do the
+                    # same or a camera can stream without ever identifying
+                    # itself to the CrowdCount API.
+                    raw_values = {}
+                    with open(identity_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#") or "=" not in line:
+                                continue
+                            key, value = line.split("=", 1)
+                            raw_values[key.strip()] = value.strip()
+
                     config = configparser.ConfigParser()
-                    config.read(identity_path)
-                    section = (
-                        config["DEFAULT"]
-                        if "DEFAULT" in config
-                        else config[config.sections()[0]]
+                    try:
+                        config.read(identity_path)
+                        section = (
+                            config["DEFAULT"]
+                            if "DEFAULT" in config
+                            else config[config.sections()[0]]
+                        )
+                    except (configparser.Error, IndexError):
+                        section = {}
+
+                    self.device_id = raw_values.get("DEVICE_ID") or section.get(
+                        "DEVICE_ID"
                     )
-                    self.device_id = section.get("DEVICE_ID", None)
-                    # Also read API password for version reporting
-                    self.api_password = section.get("API_PASSWORD", None) or None
+                    self.api_password = raw_values.get("API_PASSWORD") or section.get(
+                        "API_PASSWORD"
+                    )
                     if self.device_id:
                         print(
                             f"✓ Loaded device identity: {self.device_id} from {identity_path}"
@@ -905,20 +927,6 @@ class CrowdCountMain:
             print(f"Device ID: {self.device_id}")
         print("=" * 60 + "\n")
 
-        # Authenticate Tailscale on startup (if not already authenticated)
-        print("Checking Tailscale authentication...")
-        tailscale_ok = self.authenticate_tailscale()
-
-        # Harden SSH only after Tailscale auth is confirmed working on THIS device.
-        # If Tailscale auth fails, regular SSH stays enabled as fallback access.
-        if tailscale_ok:
-            self.harden_ssh()
-        else:
-            print(
-                "⚠ Tailscale not authenticated — keeping regular SSH enabled as fallback"
-            )
-        print()
-
         version_reported = False
 
         # Main decision loop
@@ -927,13 +935,9 @@ class CrowdCountMain:
             wifi_connected, ssid = self.check_wifi_connected()
             is_provisioned = self.is_provisioned()
             has_config = self.has_device_config()
-            tailscale_connected, tailscale_ip = self.check_tailscale_connected()
 
             print("Status Check:")
             print(f"  WiFi Connected: {wifi_connected} {f'({ssid})' if ssid else ''}")
-            print(
-                f"  Tailscale: {tailscale_connected} {f'({tailscale_ip})' if tailscale_ip else ''}"
-            )
             print(f"  Provisioned: {is_provisioned}")
             print(f"  Config Exists: {has_config}")
             print()
@@ -969,27 +973,11 @@ class CrowdCountMain:
                     continue
 
             elif wifi_connected and is_provisioned and has_config:
-                # Connected and ready → check Tailscale, then stream
-                if not tailscale_connected:
-                    self._failed_reach_count += 1
-                    print(
-                        f"Decision: WiFi connected but Tailscale not ready ({self._failed_reach_count} consecutive)"
-                    )
-                    self._escalated_recovery()
-                    time.sleep(5)
-                    continue
-
-                # Tailscale reports connected — verify server is actually reachable
-                if not self._check_server_reachable():
-                    self._failed_reach_count += 1
-                    print(
-                        f"⚠ Server unreachable despite Tailscale connected ({self._failed_reach_count} consecutive)"
-                    )
-                    self._escalated_recovery()
-                    time.sleep(10)
-                    continue
-
-                self._failed_reach_count = 0
+                # The current streaming system is outbound-only: the stream
+                # worker establishes and monitors its own Upstream session.
+                # Do not gate it on Tailscale or restart network services on
+                # a transient reachability failure; doing so tears down every
+                # active stream and can create a synchronized restart loop.
 
                 if not version_reported:
                     self.report_version()
